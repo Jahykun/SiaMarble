@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         SiaMarble — Wplace Template + Auto-Color (page-hook fix)
+// @name         SiaMarble — Auto-Color Placer for WPlace
 // @namespace    sia.marble
-// @version      3.1.0
-// @description  PNG→Anchor→GL image-source (page world). Auto-color. Overlay sadece son çare.
+// @version      3.5.0
+// @description  Auto-Color Placer for WPlace
 // @match        https://wplace.live/*
 // @run-at       document-start
 // @grant        none
@@ -10,20 +10,21 @@
 (() => {
   'use strict';
 
-  // ---------- PAGE HOOK INJECTION (no template literals) ----------
+  // ---------------------- PAGE HOOK (page world) ----------------------
   function __SIA_PAGE_HOOK__() {
     var PLOG = function(){ console.info.apply(console, ['[SiaMarble:page]'].concat([].slice.call(arguments))); };
     var PWARN = function(){ console.warn.apply(console, ['[SiaMarble:page]'].concat([].slice.call(arguments))); };
     var PERR = function(){ console.error.apply(console, ['[SiaMarble:page]'].concat([].slice.call(arguments))); };
 
-    var S = { map:null, ready:false, last:null, rebind:false };
+    var S = { map:null, ready:false, last:null, rebind:false, retry:null, retried:0, placed:false };
+
     function setMap(m){
       if(!m || S.map===m) return;
       if(typeof m.addSource!=='function'||typeof m.getStyle!=='function') return;
       S.map=m;
       var onReady=function(){
         S.ready=true; PLOG('Map captured.');
-        if (m.on) m.on('styledata', function(){ if(S.rebind && S.last){ PLOG('styledata → rebind'); tryPlace(S.last); } });
+        m.on && m.on('styledata', function(){ if(S.rebind && S.last){ PLOG('styledata → rebind'); tryPlace(S.last); } });
         if (S.last) tryPlace(S.last);
       };
       try{ (m.loaded && m.loaded()) ? onReady() : (m.once && m.once('load', onReady)); } catch(_) { onReady(); }
@@ -65,16 +66,11 @@
     window.addEventListener('load', function(){ try{ patchGL(window.maplibregl); patchGL(window.maplibre); patchGL(window.mapboxgl); }catch(_){}
     });
 
-    // Mercator helpers (z=2, 256 base, world 4x4 tiles @1000px)
-    function Merc(){
-      this.tileSize=256; this.initRes=(2*Math.PI*6378137)/256; this.half=Math.PI*6378137;
-    }
+    // ---- Mercator helpers (z=2, 256 base, world 4x4 tiles @1000px) ----
+    function Merc(){ this.tileSize=256; this.initRes=(2*Math.PI*6378137)/256; this.half=Math.PI*6378137; }
     Merc.prototype.res=function(z){ return this.initRes/Math.pow(2,z); };
     Merc.prototype.pixelsToMeters=function(px,py,z){ var r=this.res(z); return [px*r - this.half, this.half - py*r]; };
-    Merc.prototype.metersToLatLon=function(mx,my){
-      var lon=mx/this.half*180; var lat=my/this.half*180;
-      lat=180/Math.PI*(2*Math.atan(Math.exp(lat*Math.PI/180))-Math.PI/2); return [lat,lon];
-    };
+    Merc.prototype.metersToLatLon=function(mx,my){ var lon=mx/this.half*180; var lat=my/this.half*180; lat=180/Math.PI*(2*Math.atan(Math.exp(lat*Math.PI/180))-Math.PI/2); return [lat,lon]; };
     Merc.prototype.pixelsToLatLon=function(px,py,z){ var m=this.pixelsToMeters(px,py,z); return this.metersToLatLon(m[0],m[1]); };
     var merc=new Merc(); var Z_ART=2;
     function artPxToMercPxZ2(gx,gy){
@@ -94,12 +90,24 @@
       try{ if(S.map.getLayer && S.map.getLayer(LAYER_OUT))    S.map.removeLayer(LAYER_OUT);}catch(_){}
       try{ if(S.map.getSource && S.map.getSource(SRC_IMG))    S.map.removeSource(SRC_IMG);}catch(_){}
       try{ if(S.map.getSource && S.map.getSource(SRC_OUT))    S.map.removeSource(SRC_OUT);}catch(_){}
+      S.placed=false;
     }
 
     function tryPlace(payload){
-      if(!payload) return;
+      if(!payload){ return; }
       S.last=payload;
-      if(!S.map || !S.ready){ PLOG('place: map not ready'); return; }
+      if(!S.map || !S.ready){
+        if(!S.retry){
+          PLOG('place: map not ready');
+          S.retried=0;
+          S.retry=setInterval(function(){
+            S.retried++; if(S.map && S.ready){ clearInterval(S.retry); S.retry=null; tryPlace(S.last); return; }
+            if(S.retried>80){ clearInterval(S.retry); S.retry=null; PWARN('place: timeout'); }
+          },250);
+        }
+        return;
+      }
+
       var dataUrl=payload.dataUrl, gx=payload.gx, gy=payload.gy, w=payload.w, h=payload.h;
 
       var a=artPxToMercPxZ2(gx,   gy);
@@ -116,11 +124,12 @@
       if(!(valid(quad[0])&&valid(quad[1])&&valid(quad[2])&&valid(quad[3]))){ PERR('coords invalid', quad); return; }
 
       clearLayers();
-
       try{
         S.map.addSource(SRC_IMG,{ type:'image', url:dataUrl, coordinates:quad });
         S.map.addLayer({ id:LAYER_RASTER, type:'raster', source:SRC_IMG, paint:{ 'raster-resampling':'nearest','raster-opacity':1 } });
         PLOG('image source OK');
+        S.placed=true;
+        try{ window.postMessage({type:'SIA_PLACED'}, '*'); }catch(_){}
       }catch(e){ PERR('image source FAILED', e); return; }
 
       try{
@@ -139,26 +148,38 @@
       else if(d.type==='SIA_CLEAR'){ try{ clearLayers(); }catch(_){} S.last=null; }
     }, false);
   }
+  (function injectPage(){ try{ var s=document.createElement('script'); s.textContent='('+__SIA_PAGE_HOOK__.toString()+')();'; (document.head||document.documentElement).appendChild(s); s.remove(); }catch(_){}})();
 
-  // inject (no backticks)
-  (function inject(){
-    try{
-      var s=document.createElement('script');
-      s.textContent='('+__SIA_PAGE_HOOK__.toString()+')();';
-      (document.head||document.documentElement).appendChild(s);
-      s.remove();
-    }catch(_){}
-  })();
-
-  // ---------- USERSCRIPT SIDE ----------
+  // ---------------------- USERSCRIPT (sandbox) ----------------------
+  const LS_KEY = 'sia.marble.v1';
   const STATE = {
     template:{canvas:null, ctx:null, w:0, h:0},
     anchor:null, wantAnchorFromPaint:false,
-    ui:{hint:null},
-    pmap:new Map()
+    pmap:new Map(),
+    ui:{root:null, body:null, hint:null, minBtn:null, clearBtn:null, fileBtn:null, fileName:null, minimized:false, drag:{dx:0, dy:0, dragging:false}},
+    lastPlacePayload:null, placed:false
   };
   const log=(...a)=>console.info('[SiaMarble]',...a);
-  function hint(t){ if(STATE.ui.hint) STATE.ui.hint.textContent=t||''; if(t) log(t); }
+  const hint=(t)=>{ if(STATE.ui.hint) STATE.ui.hint.textContent=t||''; if(t) log(t); };
+
+  // --- Persist helpers ---
+  function savePersist(){
+    try{
+      const t = STATE.template?.canvas ? STATE.template.canvas.toDataURL('image/png') : null;
+      const a = STATE.anchor ? {gx:STATE.anchor.gx, gy:STATE.anchor.gy} : null;
+      const payload = { t, w:STATE.template?.w||0, h:STATE.template?.h||0, a };
+      localStorage.setItem(LS_KEY, JSON.stringify(payload));
+    }catch(_){}
+  }
+  function loadPersist(){
+    try{
+      const s=localStorage.getItem(LS_KEY); if(!s) return null;
+      return JSON.parse(s);
+    }catch(_){ return null; }
+  }
+  function clearPersist(){
+    try{ localStorage.removeItem(LS_KEY); }catch(_){}
+  }
 
   // Palette (RGB→id)
   (function initPalette(){
@@ -178,35 +199,162 @@
     for(const [r,g,b,id] of P) STATE.pmap.set(`${r},${g},${b}`, id);
   })();
 
-  // UI (minimal)
+  // ---------------------- UI (stacked/compact + draggable + minimize + clear) ----------------------
   function mountUI(){
-    const box=document.createElement('div');
-    box.style.cssText='position:fixed;top:12px;right:12px;z-index:2147483647;background:#111827;color:#e5e7eb;border:1px solid #2b2f3a;border-radius:12px;padding:8px;display:flex;gap:8px;align-items:center;font:12px system-ui';
-    const file=document.createElement('input');
-    file.type='file'; file.accept='image/png';
-    file.style.cssText='appearance:none;background:#1f2937;border:1px solid #374151;color:#e5e7eb;border-radius:8px;padding:6px 10px;cursor:pointer';
-    const span=document.createElement('span'); span.style.color='#94a3b8'; span.textContent='PNG yükle → bir piksel boya';
-    box.appendChild(file); box.appendChild(span);
-    document.documentElement.appendChild(box);
-    STATE.ui.hint=span;
-    file.addEventListener('change', onPickPNG);
+    const wrap = document.createElement('div');
+    wrap.style.cssText=[
+      'position:fixed;top:12px;right:12px;z-index:2147483647',
+      'width:260px;max-width:calc(100vw - 24px)',
+      'color:#e5e7eb;font:12px system-ui'
+    ].join(';');
+
+    wrap.innerHTML = `
+      <div id="sia-head" style="user-select:none;background:#0b1020;border:1px solid #1f2540;border-radius:10px 10px 0 0;padding:8px 10px;display:flex;align-items:center;gap:8px;cursor:grab;">
+        <strong style="font-weight:600;letter-spacing:.2px;">❤ SiaMarble ❤</strong>
+        <div style="margin-left:auto;display:flex;gap:6px;">
+          <button id="sia-min" title="küçült" style="background:#141a33;border:1px solid #263056;border-radius:6px;padding:2px 8px;color:#cbd5e1;cursor:pointer">—</button>
+          <button id="sia-close" title="kapat" style="background:#24131b;border:1px solid #4a1f2f;border-radius:6px;padding:2px 8px;color:#fecaca;cursor:pointer">×</button>
+        </div>
+      </div>
+      <div id="sia-body" style="background:#0f172a;border:1px solid #1f2540;border-top:none;border-radius:0 0 10px 10px;padding:10px;display:flex;flex-direction:column;gap:8px;align-items:stretch;">
+        <input id="sia-file" type="file" accept="image/png" style="display:none"/>
+        <button id="sia-file-btn" style="appearance:none;background:#111827;border:1px solid #374151;color:#e5e7eb;border-radius:8px;padding:6px 10px;cursor:pointer;text-align:center">📁 Upload Template (.png)</button>
+        <div id="sia-file-name" style="color:#9ca3af;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">-  No file selected.  -</div>
+        <button id="sia-clear" title="Taslağı Kaldır" style="background:#3a1a1f;border:1px solid #6a2a33;color:#fecaca;border-radius:8px;padding:6px 10px;cursor:pointer">❌ Delete Template</button>
+        <div id="sia-hint" style="color:#94a3b8;line-height:1.35;min-height:16px"></div>
+      </div>`;
+
+    document.documentElement.appendChild(wrap);
+    STATE.ui.root = wrap;
+    STATE.ui.body = wrap.querySelector('#sia-body');
+    STATE.ui.hint = wrap.querySelector('#sia-hint');
+    STATE.ui.minBtn = wrap.querySelector('#sia-min');
+    STATE.ui.clearBtn = wrap.querySelector('#sia-clear');
+    STATE.ui.fileBtn = wrap.querySelector('#sia-file-btn');
+    STATE.ui.fileName = wrap.querySelector('#sia-file-name');
+
+    // drag (WHY: imlece “yapışma” olmasın diye window dinlenir)
+    const head = wrap.querySelector('#sia-head');
+    let startX=0, startY=0, startLeft=0, startTop=0;
+    function onMove(e){
+      if(!STATE.ui.drag.dragging) return;
+      const x = startLeft + (e.clientX - startX);
+      const y = startTop  + (e.clientY - startY);
+      wrap.style.left = Math.max(4, Math.min(window.innerWidth - wrap.offsetWidth - 4, x))+'px';
+      wrap.style.top  = Math.max(4, Math.min(window.innerHeight - 40, y))+'px';
+      wrap.style.right = 'auto';
+    }
+    function onUp(){ STATE.ui.drag.dragging=false; head.style.cursor='grab';
+      window.removeEventListener('pointermove', onMove, {capture:true});
+      window.removeEventListener('pointerup', onUp, {capture:true});
+      window.removeEventListener('pointercancel', onUp, {capture:true});
+    }
+    head.addEventListener('pointerdown', (e)=>{
+      if(e.button!==0) return; e.preventDefault();
+      const r=wrap.getBoundingClientRect();
+      startX=e.clientX; startY=e.clientY; startLeft=r.left; startTop=r.top;
+      STATE.ui.drag.dragging=true; head.style.cursor='grabbing';
+      window.addEventListener('pointermove', onMove, {capture:true});
+      window.addEventListener('pointerup', onUp, {capture:true});
+      window.addEventListener('pointercancel', onUp, {capture:true});
+    });
+
+    // minimize / expand
+    STATE.ui.minBtn.onclick = ()=>{
+      STATE.ui.minimized = !STATE.ui.minimized;
+      STATE.ui.body.style.display = STATE.ui.minimized ? 'none' : 'flex';
+      STATE.ui.minBtn.textContent = STATE.ui.minimized ? '+' : '—';
+      STATE.ui.minBtn.title = STATE.ui.minimized ? 'büyüt' : 'küçült';
+    };
+    // clear template
+    STATE.ui.clearBtn.onclick = ()=>{
+      try{ window.postMessage({type:'SIA_CLEAR'}, '*'); }catch(_){}
+      STATE.template={canvas:null, ctx:null, w:0, h:0};
+      STATE.anchor=null; STATE.placed=false; STATE.wantAnchorFromPaint=false;
+      clearPersist();
+      updateUIState('- Template Deleted. -');
+    };
+    // close
+    wrap.querySelector('#sia-close').onclick = ()=>{
+      try{ window.postMessage({type:'SIA_CLEAR'}, '*'); }catch(_){}
+      wrap.remove();
+    };
+
+    // file button → hidden input
+    const fileInput = wrap.querySelector('#sia-file');
+    STATE.ui.fileBtn.onclick = () => fileInput.click();
+    fileInput.addEventListener('change', onPickPNG);
+
+    // try restore
+    restoreFromStorage();
+    updateUIState();
   }
   if (document.readyState==='loading') document.addEventListener('DOMContentLoaded', mountUI); else mountUI();
 
-  // PNG seç
+  function updateUIState(msg){
+    const hasTpl = !!STATE.template.canvas;
+    if (STATE.ui.clearBtn){
+      STATE.ui.clearBtn.disabled = !hasTpl;
+      STATE.ui.clearBtn.style.opacity = hasTpl ? '1' : '.6';
+      STATE.ui.clearBtn.style.cursor  = hasTpl ? 'pointer' : 'not-allowed';
+    }
+    if (!hasTpl) {
+      if (STATE.ui.fileName) STATE.ui.fileName.textContent = '-  No file selected.  -';
+    }
+    if (msg) hint(msg);
+  }
+
+  // ---------------------- Restore on load ----------------------
+  function restoreFromStorage(){
+    const saved = loadPersist();
+    if(!saved || !saved.t) { updateUIState(); return; }
+    const img = new Image();
+    img.onload = ()=>{
+      const c=document.createElement('canvas'); c.width=img.width; c.height=img.height;
+      const ctx=c.getContext('2d',{willReadFrequently:true});
+      ctx.imageSmoothingEnabled=false; ctx.drawImage(img,0,0);
+      STATE.template={canvas:c, ctx, w:c.width, h:c.height};
+      if (STATE.ui.fileName) STATE.ui.fileName.textContent = `Kaydedilen taslak (${c.width}×${c.height})`;
+      if (saved.a && Number.isFinite(saved.a.gx) && Number.isFinite(saved.a.gy)) {
+        STATE.anchor={gx:Number(saved.a.gx), gy:Number(saved.a.gy)};
+        hint(`Kaydedilen taslak yüklendi. Yerleştiriliyor…`);
+        const payload = { dataUrl: saved.t, gx:STATE.anchor.gx, gy:STATE.anchor.gy, w:c.width, h:c.height };
+        STATE.lastPlacePayload = payload;
+        try{ window.postMessage({ type:'SIA_PLACE', payload }, '*'); }catch(_){}
+        setTimeout(()=>{ if(!STATE.placed && STATE.lastPlacePayload){ window.postMessage({type:'SIA_PLACE', payload:STATE.lastPlacePayload}, '*'); } }, 1200);
+      } else {
+        STATE.wantAnchorFromPaint=true;
+        hint(`Taslak yüklendi (${c.width}×${c.height}). SOL-ÜST piksel boya → anchor alınacak.`);
+      }
+      updateUIState();
+    };
+    img.onerror=()=>{ clearPersist(); updateUIState('Kayıtlı taslak okunamadı.'); };
+    img.src = saved.t;
+  }
+
+  // ---------------------- PNG seçimi ----------------------
   async function onPickPNG(ev){
-    const f=ev.target.files && ev.target.files[0]; if(!f) return;
+    const f=ev.target.files?.[0]; if(!f) return;
     const img=await new Promise((res,rej)=>{ const i=new Image(); i.onload=()=>res(i); i.onerror=rej; i.src=URL.createObjectURL(f); });
     const c=document.createElement('canvas'); c.width=img.width; c.height=img.height;
     const ctx=c.getContext('2d',{willReadFrequently:true});
     ctx.imageSmoothingEnabled=false; ctx.drawImage(img,0,0);
     STATE.template={canvas:c, ctx, w:c.width, h:c.height};
-    STATE.anchor=null; STATE.wantAnchorFromPaint=true;
-    hint(`PNG: ${c.width}×${c.height}. Bir piksel boya → anchor alınca otomatik yerleşecek.`);
+    STATE.anchor=null; STATE.wantAnchorFromPaint=true; STATE.placed=false;
+    if (STATE.ui.fileName) STATE.ui.fileName.textContent = f.name || `${c.width}×${c.height}`;
+    savePersist(); // WHY: PNG’yi kalıcı tutmak için
+    hint(`🎨 Paint a pixel to set template. (${c.width}×${c.height})`);
+    updateUIState();
   }
 
-  // fetch patch → anchor + auto-color
-  (function patchFetch(){
+  // ---------------------- Page->Userscript sinyali ----------------------
+  window.addEventListener('message', (e)=>{
+    const d=e && e.data; if(!d || typeof d!=='object') return;
+    if(d.type==='SIA_PLACED'){ STATE.placed=true; hint('Taslak GL üzerinde.'); }
+  }, false);
+
+  // ---------------------- FETCH PATCH: Anchor (TOP-LEFT) + Auto-Color ----------------------
+  ;(function patchFetch(){
     const orig=window.fetch;
     window.fetch=async function(input, init){
       try{
@@ -215,6 +363,7 @@
         const mm=/\/s(\d+)\/pixel\/(\d+)\/(\d+)/.exec(url);
         if(!mm || method!=='POST') return orig.apply(this, arguments);
 
+        // body parse
         let bodyText=null;
         if (init && typeof init.body==='string') bodyText=init.body;
         else if (typeof input!=='string' && input && input.clone){ try{ bodyText=await input.clone().text(); }catch{} }
@@ -223,20 +372,23 @@
 
         const tileX=+mm[2], tileY=+mm[3];
 
-        // Anchor (ilk POST)
+        // Anchor: TOP-LEFT (no offset) + persist
         if(STATE.template.canvas && STATE.wantAnchorFromPaint && !STATE.anchor && Array.isArray(obj.coords) && obj.coords.length>=2){
           const x0=Number(obj.coords[0])||0, y0=Number(obj.coords[1])||0;
-          const gx=(tileX%4)*1000 + x0 - Math.floor(STATE.template.w/2);
-          const gy=(tileY%4)*1000 + y0 - Math.floor(STATE.template.h/2);
+          const gx=(tileX%4)*1000 + x0;
+          const gy=(tileY%4)*1000 + y0;
           STATE.anchor={gx,gy}; STATE.wantAnchorFromPaint=false;
-          hint(`Anchor: ${gx}, ${gy} → taslak kuruluyor…`);
+          savePersist(); // WHY: anchor kalıcı
+          hint(`✅ Template created. Coordinates: ${gx}, ${gy}`);
           try{
-            const dataUrl = STATE.template.canvas.toDataURL('image/png');
-            window.postMessage({ type:'SIA_PLACE', payload:{ dataUrl, gx, gy, w:STATE.template.w, h:STATE.template.h } }, '*');
+            const payload = { dataUrl: STATE.template.canvas.toDataURL('image/png'), gx, gy, w:STATE.template.w, h:STATE.template.h };
+            STATE.lastPlacePayload = payload;
+            window.postMessage({ type:'SIA_PLACE', payload }, '*');
+            setTimeout(()=>{ if(!STATE.placed && STATE.lastPlacePayload){ window.postMessage({type:'SIA_PLACE', payload:STATE.lastPlacePayload}, '*'); } }, 1200);
           }catch(_){}
         }
 
-        // Auto-color
+        // Auto-color patch
         if (STATE.template.ctx && STATE.anchor && Array.isArray(obj.coords) && Array.isArray(obj.colors)){
           const coords=obj.coords, colors=obj.colors.slice();
           for (let i=0,j=0;i<coords.length;i+=2,j++){
