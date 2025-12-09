@@ -108,6 +108,14 @@
         return;
       }
 
+      var show = payload.visible!==false;
+      if(!show){ clearLayers(); return; }
+
+      var opacity=1;
+      if(typeof payload.opacity==='number' && isFinite(payload.opacity)){
+        opacity=Math.min(1, Math.max(0, payload.opacity));
+      }
+
       var dataUrl=payload.dataUrl, gx=payload.gx, gy=payload.gy, w=payload.w, h=payload.h;
 
       var a=artPxToMercPxZ2(gx,   gy);
@@ -126,7 +134,7 @@
       clearLayers();
       try{
         S.map.addSource(SRC_IMG,{ type:'image', url:dataUrl, coordinates:quad });
-        S.map.addLayer({ id:LAYER_RASTER, type:'raster', source:SRC_IMG, paint:{ 'raster-resampling':'nearest','raster-opacity':1 } });
+        S.map.addLayer({ id:LAYER_RASTER, type:'raster', source:SRC_IMG, paint:{ 'raster-resampling':'nearest','raster-opacity':opacity } });
         PLOG('image source OK');
         S.placed=true;
         try{ window.postMessage({type:'SIA_PLACED'}, '*'); }catch(_){}
@@ -152,15 +160,41 @@
 
   // ---------------------- USERSCRIPT (sandbox) ----------------------
   const LS_KEY = 'sia.marble.v1';
+  const LS_OVERLAY_KEY = 'sia.marble.overlay';
   const STATE = {
     template:{canvas:null, ctx:null, w:0, h:0},
     anchor:null, wantAnchorFromPaint:false,
     pmap:new Map(),
-    ui:{root:null, body:null, hint:null, minBtn:null, clearBtn:null, fileBtn:null, fileName:null, minimized:false, drag:{dx:0, dy:0, dragging:false}},
-    lastPlacePayload:null, placed:false
+    overlay:{visible:true, opacity:0.6, mode:'full'},
+    ui:{root:null, body:null, hint:null, minBtn:null, clearBtn:null, fileBtn:null, fileName:null, overlayToggle:null, overlayRange:null, overlayVal:null, overlayStyle:null, overlayStyleRow:null, minimized:false, drag:{dx:0, dy:0, dragging:false}},
+    lastPlacePayload:null, placed:false,
+    pageOverlay:false
   };
   const log=(...a)=>console.info('[SiaMarble]',...a);
   const hint=(t)=>{ if(STATE.ui.hint) STATE.ui.hint.textContent=t||''; if(t) log(t); };
+  const clampOpacity=(v)=>{
+    const n=Number(v);
+    if(!Number.isFinite(n)) return STATE.overlay.opacity;
+    return Math.min(1, Math.max(0, n));
+  };
+  const normalizeMode=(v)=> v==='edges' ? 'edges' : 'full';
+
+  loadOverlayPrefs();
+
+  function saveOverlayPrefs(){
+    try{
+      localStorage.setItem(LS_OVERLAY_KEY, JSON.stringify({ opacity:STATE.overlay.opacity, visible:STATE.overlay.visible, mode:STATE.overlay.mode }));
+    }catch(_){}
+  }
+  function loadOverlayPrefs(){
+    try{
+      const raw=localStorage.getItem(LS_OVERLAY_KEY); if(!raw) return;
+      const o=JSON.parse(raw);
+      if(typeof o.opacity==='number') STATE.overlay.opacity=clampOpacity(o.opacity);
+      if(typeof o.visible==='boolean') STATE.overlay.visible=o.visible;
+      if(o.mode) STATE.overlay.mode=normalizeMode(o.mode);
+    }catch(_){}
+  }
 
   // --- Persist helpers ---
   function savePersist(){
@@ -169,6 +203,7 @@
       const a = STATE.anchor ? {gx:STATE.anchor.gx, gy:STATE.anchor.gy} : null;
       const payload = { t, w:STATE.template?.w||0, h:STATE.template?.h||0, a };
       localStorage.setItem(LS_KEY, JSON.stringify(payload));
+      saveOverlayPrefs();
     }catch(_){}
   }
   function loadPersist(){
@@ -220,7 +255,22 @@
         <input id="sia-file" type="file" accept="image/png" style="display:none"/>
         <button id="sia-file-btn" style="appearance:none;background:#111827;border:1px solid #374151;color:#e5e7eb;border-radius:8px;padding:6px 10px;cursor:pointer;text-align:center">📁 Upload Template (.png)</button>
         <div id="sia-file-name" style="color:#9ca3af;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">-  No file selected.  -</div>
-        <button id="sia-clear" title="Taslağı Kaldır" style="background:#3a1a1f;border:1px solid #6a2a33;color:#fecaca;border-radius:8px;padding:6px 10px;cursor:pointer">❌ Delete Template</button>
+        <div id="sia-overlay-ctrl" style="display:flex;flex-direction:column;gap:6px;">
+          <button id="sia-overlay-toggle" style="background:#141a33;border:1px solid #263056;border-radius:8px;padding:6px 10px;color:#e5e7eb;cursor:pointer;">🙈 Hide Overlay</button>
+          <div style="display:flex;align-items:center;gap:6px;color:#cbd5e1;font-size:11px;">
+            <span style="min-width:52px;">Opacity</span>
+            <input id="sia-overlay-range" type="range" min="10" max="100" value="60" style="flex:1;"/>
+            <span id="sia-overlay-val" style="width:40px;text-align:right;color:#9ca3af;">60%</span>
+          </div>
+          <div id="sia-style-row" style="display:flex;align-items:center;gap:6px;color:#cbd5e1;font-size:11px;">
+            <span style="min-width:52px;">Style</span>
+            <select id="sia-overlay-style" style="flex:1;background:#111827;border:1px solid #374151;color:#e5e7eb;border-radius:6px;padding:4px 6px;">
+              <option value="full">Full</option>
+              <option value="edges">Half</option>
+            </select>
+          </div>
+        </div>
+        <button id="sia-clear" title="Taslagi Kaldir" style="background:#3a1a1f;border:1px solid #6a2a33;color:#fecaca;border-radius:8px;padding:6px 10px;cursor:pointer">❌ Delete Template</button>
         <div id="sia-hint" style="color:#94a3b8;line-height:1.35;min-height:16px"></div>
       </div>`;
 
@@ -232,6 +282,22 @@
     STATE.ui.clearBtn = wrap.querySelector('#sia-clear');
     STATE.ui.fileBtn = wrap.querySelector('#sia-file-btn');
     STATE.ui.fileName = wrap.querySelector('#sia-file-name');
+    STATE.ui.overlayToggle = wrap.querySelector('#sia-overlay-toggle');
+    STATE.ui.overlayRange = wrap.querySelector('#sia-overlay-range');
+    STATE.ui.overlayVal = wrap.querySelector('#sia-overlay-val');
+    STATE.ui.overlayStyle = wrap.querySelector('#sia-overlay-style');
+    STATE.ui.overlayStyleRow = wrap.querySelector('#sia-style-row');
+    if (STATE.ui.overlayRange){
+      const pct=Math.round(STATE.overlay.opacity*100);
+      STATE.ui.overlayRange.value=pct;
+      if(STATE.ui.overlayVal) STATE.ui.overlayVal.textContent=`${pct}%`;
+    }
+    if (STATE.ui.overlayStyle){
+      STATE.ui.overlayStyle.value = normalizeMode(STATE.overlay.mode);
+    }
+    if (STATE.ui.overlayStyle){
+      STATE.ui.overlayStyle.value = normalizeMode(STATE.overlay.mode);
+    }
 
     // drag (WHY: imlece “yapışma” olmasın diye window dinlenir)
     const head = wrap.querySelector('#sia-head');
@@ -266,11 +332,50 @@
       STATE.ui.minBtn.textContent = STATE.ui.minimized ? '+' : '—';
       STATE.ui.minBtn.title = STATE.ui.minimized ? 'büyüt' : 'küçült';
     };
+    // overlay toggle
+    if (STATE.ui.overlayToggle){
+      STATE.ui.overlayToggle.onclick = ()=>{
+        if(!STATE.template.canvas) return;
+        STATE.overlay.visible = !STATE.overlay.visible;
+        saveOverlayPrefs();
+        STATE.placed=false;
+        if(STATE.overlay.visible){
+          sendPlaceToMap(true);
+          hint('Overlay shown.');
+        }else{
+          clearOverlayOnMap();
+          hint('Overlay hidden.');
+        }
+        updateUIState();
+      };
+    }
+    if (STATE.ui.overlayRange){
+      const handleOpacity=(val)=>{
+        const pct=Math.max(0, Math.min(100, Number(val)||0));
+        STATE.overlay.opacity=clampOpacity(pct/100);
+        saveOverlayPrefs();
+        updateUIState();
+        if(STATE.overlay.visible && STATE.lastPlacePayload){ sendPlaceToMap(false); }
+      };
+      STATE.ui.overlayRange.addEventListener('input', (e)=>handleOpacity(e.target.value));
+      STATE.ui.overlayRange.addEventListener('change', (e)=>handleOpacity(e.target.value));
+    }
+    if (STATE.ui.overlayStyle){
+      const handleStyle=(val)=>{
+        STATE.overlay.mode=normalizeMode(val);
+        saveOverlayPrefs();
+        updateUIState();
+        if(STATE.overlay.visible && STATE.lastPlacePayload){ sendPlaceToMap(false); }
+      };
+      STATE.ui.overlayStyle.addEventListener('change', (e)=>handleStyle(e.target.value));
+    }
     // clear template
     STATE.ui.clearBtn.onclick = ()=>{
       try{ window.postMessage({type:'SIA_CLEAR'}, '*'); }catch(_){}
-      STATE.template={canvas:null, ctx:null, w:0, h:0};
-      STATE.anchor=null; STATE.placed=false; STATE.wantAnchorFromPaint=false;
+      STATE.template={canvas:null, ctx:null, w:0, h:0, alpha:null};
+      STATE.anchor=null; STATE.placed=false; STATE.wantAnchorFromPaint=false; STATE.lastPlacePayload=null;
+      const fi=STATE.ui.fileBtn && STATE.ui.fileBtn.previousElementSibling;
+      if(fi && fi.tagName==='INPUT') { try{ fi.value=''; }catch(_){ } }
       clearPersist();
       updateUIState('- Template Deleted. -');
     };
@@ -298,10 +403,155 @@
       STATE.ui.clearBtn.style.opacity = hasTpl ? '1' : '.6';
       STATE.ui.clearBtn.style.cursor  = hasTpl ? 'pointer' : 'not-allowed';
     }
+    if (STATE.ui.overlayToggle){
+      STATE.ui.overlayToggle.disabled = !hasTpl;
+      STATE.ui.overlayToggle.style.opacity = hasTpl ? '1' : '.6';
+      STATE.ui.overlayToggle.style.cursor = hasTpl ? 'pointer' : 'not-allowed';
+      STATE.ui.overlayToggle.textContent = STATE.overlay.visible ? '🙈 Hide Overlay' : '🙉 Show Overlay';
+    }
+    if (STATE.ui.overlayRange){
+      const pct=Math.round(STATE.overlay.opacity*100);
+      STATE.ui.overlayRange.disabled = !hasTpl || !STATE.overlay.visible;
+      STATE.ui.overlayRange.style.opacity = (hasTpl && STATE.overlay.visible) ? '1' : '.5';
+      STATE.ui.overlayRange.value = pct;
+      if (STATE.ui.overlayVal) STATE.ui.overlayVal.textContent=`${pct}%`;
+    }
+    if (STATE.ui.overlayStyle){
+      const showStyle = hasTpl && STATE.overlay.visible;
+      STATE.ui.overlayStyle.disabled = !showStyle;
+      STATE.ui.overlayStyleRow.style.display = showStyle ? 'flex' : 'none';
+      STATE.ui.overlayStyle.value = normalizeMode(STATE.overlay.mode);
+    }
     if (!hasTpl) {
       if (STATE.ui.fileName) STATE.ui.fileName.textContent = '-  No file selected.  -';
     }
     if (msg) hint(msg);
+  }
+
+  function clearOverlayOnMap(){
+    if(STATE.pageOverlay){
+      try{ window.postMessage({type:'SIA_CLEAR'}, '*'); }catch(_){}
+    }
+    STATE.placed=false;
+  }
+
+  function parseTileXY(url){
+    try{
+      const mm=/\/tiles\/(\d+)\/(\d+)\.png/i.exec(url);
+      if(mm) return [Number(mm[1]), Number(mm[2])];
+      const parts=url.split('/');
+      const yPart=parts.pop(); const xPart=parts.pop();
+      const y=Number((yPart||'').split('.')[0]); const x=Number(xPart);
+      if(Number.isFinite(x) && Number.isFinite(y)) return [x,y];
+    }catch(_){}
+    return null;
+  }
+
+  async function blendTileWithTemplate(blob, tileX, tileY, contentType){
+    if(!STATE.template.canvas || !STATE.anchor || !STATE.overlay.visible) return blob;
+    const mix=STATE.overlay.opacity;
+    const img=await createImageBitmap(blob);
+    const tw=img.width, th=img.height;
+    const canvas=document.createElement('canvas');
+    canvas.width=tw; canvas.height=th;
+    const ctx=canvas.getContext('2d',{willReadFrequently:true});
+    ctx.imageSmoothingEnabled=false;
+    ctx.drawImage(img,0,0,tw,th);
+
+    const tplW=STATE.template.w, tplH=STATE.template.h;
+    const tplLeft=STATE.anchor.gx, tplTop=STATE.anchor.gy;
+    const WORLD=4000;
+    const mode=normalizeMode(STATE.overlay.mode);
+    const alphaArr=STATE.template.alpha;
+
+    function buildSegments(start, size){
+      const segs=[];
+      const end=start+size;
+      const clippedStart=Math.max(0, start);
+      const clippedEnd=Math.min(end, WORLD);
+      segs.push({ start:clippedStart, end:clippedEnd, offset:clippedStart - start });
+      if(end>WORLD){
+        const overflow=end-WORLD;
+        segs.push({ start:0, end:overflow, offset:size-overflow });
+      }
+      if(start<0){
+        const under=-start;
+        segs.push({ start:WORLD-under, end:WORLD, offset:0 });
+      }
+      return segs;
+    }
+
+    const xSegs=buildSegments(tplLeft, tplW);
+    const ySegs=buildSegments(tplTop, tplH);
+
+    const tileBaseX=((tileX%4)+4)%4*1000;
+    const tileBaseY=((tileY%4)+4)%4*1000;
+
+    for(const sx of xSegs){
+      const overlapLeft=Math.max(tileBaseX, sx.start);
+      const overlapRight=Math.min(tileBaseX+tw, sx.end);
+      if(overlapRight<=overlapLeft) continue;
+      const tplOffsetX = sx.offset + (overlapLeft - sx.start);
+      const tileOffsetX = overlapLeft - tileBaseX;
+      for(const sy of ySegs){
+        const overlapTop=Math.max(tileBaseY, sy.start);
+        const overlapBottom=Math.min(tileBaseY+th, sy.end);
+        if(overlapBottom<=overlapTop) continue;
+        const tplOffsetY = sy.offset + (overlapTop - sy.start);
+        const tileOffsetY = overlapTop - tileBaseY;
+        const ow=overlapRight - overlapLeft;
+        const oh=overlapBottom - overlapTop;
+        const tplData=STATE.template.ctx.getImageData(tplOffsetX, tplOffsetY, ow, oh).data;
+        const tileImg=ctx.getImageData(tileOffsetX, tileOffsetY, ow, oh);
+        const td=tileImg.data;
+        for(let i=0;i<tplData.length;i+=4){
+          const a=tplData[i+3];
+          if(a<128) continue;
+          const r=tplData[i], g=tplData[i+1], b=tplData[i+2];
+          let useMix = mix;
+          if(mode==='edges' && alphaArr){
+            const idx=i/4;
+            const lx=tplOffsetX + (idx % ow);
+            const ly=tplOffsetY + Math.floor(idx / ow);
+            const baseIndex = (ly*tplW + lx)*4 + 3;
+            const leftA  = lx>0 ? alphaArr[baseIndex - 4] : 0;
+            const rightA = lx<tplW-1 ? alphaArr[baseIndex + 4] : 0;
+            const upA    = ly>0 ? alphaArr[baseIndex - tplW*4] : 0;
+            const downA  = ly<tplH-1 ? alphaArr[baseIndex + tplW*4] : 0;
+            const isEdge = (leftA<128)||(rightA<128)||(upA<128)||(downA<128);
+            useMix = isEdge ? Math.min(1, mix*1.1) : Math.min(1, mix*0.65);
+          }
+          td[i]   = Math.round(td[i]   * (1-useMix) + r * useMix);
+          td[i+1] = Math.round(td[i+1] * (1-useMix) + g * useMix);
+          td[i+2] = Math.round(td[i+2] * (1-useMix) + b * useMix);
+          td[i+3] = Math.max(td[i+3], Math.round(a * useMix));
+        }
+        ctx.putImageData(tileImg, tileOffsetX, tileOffsetY);
+      }
+    }
+
+    const out=await new Promise((res)=>canvas.toBlob((b)=>res(b||blob), contentType||'image/png'));
+    return out || blob;
+  }
+
+  function sendPlaceToMap(withRetry){
+    if(!STATE.lastPlacePayload) return;
+    const payload=Object.assign({}, STATE.lastPlacePayload, { opacity: STATE.overlay.opacity, visible: STATE.overlay.visible });
+    if(!STATE.overlay.visible){
+      clearOverlayOnMap();
+      return;
+    }
+    STATE.placed=false;
+    if(STATE.pageOverlay){
+      try{ window.postMessage({ type:'SIA_PLACE', payload }, '*'); }catch(_){}
+      if(withRetry){
+        setTimeout(()=>{
+          if(!STATE.placed && STATE.overlay.visible && STATE.lastPlacePayload){
+            try{ window.postMessage({ type:'SIA_PLACE', payload:Object.assign({}, STATE.lastPlacePayload, { opacity: STATE.overlay.opacity, visible:true }) }, '*'); }catch(_){}
+          }
+        }, 1200);
+      }
+    }
   }
 
   // ---------------------- Restore on load ----------------------
@@ -313,18 +563,17 @@
       const c=document.createElement('canvas'); c.width=img.width; c.height=img.height;
       const ctx=c.getContext('2d',{willReadFrequently:true});
       ctx.imageSmoothingEnabled=false; ctx.drawImage(img,0,0);
-      STATE.template={canvas:c, ctx, w:c.width, h:c.height};
-      if (STATE.ui.fileName) STATE.ui.fileName.textContent = `Kaydedilen taslak (${c.width}×${c.height})`;
+      STATE.template={canvas:c, ctx, w:c.width, h:c.height, alpha:ctx.getImageData(0,0,c.width,c.height).data};
+      if (STATE.ui.fileName) STATE.ui.fileName.textContent = `Template Uploaded (${c.width}×${c.height})`;
       if (saved.a && Number.isFinite(saved.a.gx) && Number.isFinite(saved.a.gy)) {
         STATE.anchor={gx:Number(saved.a.gx), gy:Number(saved.a.gy)};
-        hint(`Kaydedilen taslak yüklendi. Yerleştiriliyor…`);
+        hint(`Placing Template...`);
         const payload = { dataUrl: saved.t, gx:STATE.anchor.gx, gy:STATE.anchor.gy, w:c.width, h:c.height };
         STATE.lastPlacePayload = payload;
-        try{ window.postMessage({ type:'SIA_PLACE', payload }, '*'); }catch(_){}
-        setTimeout(()=>{ if(!STATE.placed && STATE.lastPlacePayload){ window.postMessage({type:'SIA_PLACE', payload:STATE.lastPlacePayload}, '*'); } }, 1200);
+        sendPlaceToMap(true);
       } else {
         STATE.wantAnchorFromPaint=true;
-        hint(`Taslak yüklendi (${c.width}×${c.height}). SOL-ÜST piksel boya → anchor alınacak.`);
+        hint(`✅ Coordinates: ${gx}, ${gy}`);
       }
       updateUIState();
     };
@@ -335,12 +584,14 @@
   // ---------------------- PNG seçimi ----------------------
   async function onPickPNG(ev){
     const f=ev.target.files?.[0]; if(!f) return;
+    try{ ev.target.value=''; }catch(_){}
     const img=await new Promise((res,rej)=>{ const i=new Image(); i.onload=()=>res(i); i.onerror=rej; i.src=URL.createObjectURL(f); });
     const c=document.createElement('canvas'); c.width=img.width; c.height=img.height;
     const ctx=c.getContext('2d',{willReadFrequently:true});
     ctx.imageSmoothingEnabled=false; ctx.drawImage(img,0,0);
-    STATE.template={canvas:c, ctx, w:c.width, h:c.height};
-    STATE.anchor=null; STATE.wantAnchorFromPaint=true; STATE.placed=false;
+    STATE.template={canvas:c, ctx, w:c.width, h:c.height, alpha:ctx.getImageData(0,0,c.width,c.height).data};
+    STATE.anchor=null; STATE.wantAnchorFromPaint=true; STATE.placed=false; STATE.lastPlacePayload=null;
+    clearOverlayOnMap();
     if (STATE.ui.fileName) STATE.ui.fileName.textContent = f.name || `${c.width}×${c.height}`;
     savePersist(); // WHY: PNG’yi kalıcı tutmak için
     hint(`🎨 Paint a pixel to set template. (${c.width}×${c.height})`);
@@ -361,6 +612,22 @@
         const url=(typeof input==='string')?input:(input&&input.url)||'';
         const method=((init && init.method) || (typeof input!=='string' && input && input.method) || 'GET').toUpperCase();
         const mm=/\/s(\d+)\/pixel\/(\d+)\/(\d+)/.exec(url);
+        const tileMatch = parseTileXY(url);
+
+        // Tile overlay (image responses)
+        if(method==='GET' && tileMatch && STATE.template.canvas && STATE.anchor && STATE.overlay.visible){
+          const res=await orig.apply(this, arguments);
+          const ctype=res.headers?.get('content-type')||'';
+          if(!ctype.includes('image')) return res;
+          try{
+            const baseBlob=await res.clone().blob();
+            const blended=await blendTileWithTemplate(baseBlob, tileMatch[0], tileMatch[1], ctype);
+            return new Response(blended, { status:res.status, statusText:res.statusText, headers:res.headers });
+          }catch(_){
+            return res;
+          }
+        }
+
         if(!mm || method!=='POST') return orig.apply(this, arguments);
 
         // body parse
@@ -383,8 +650,7 @@
           try{
             const payload = { dataUrl: STATE.template.canvas.toDataURL('image/png'), gx, gy, w:STATE.template.w, h:STATE.template.h };
             STATE.lastPlacePayload = payload;
-            window.postMessage({ type:'SIA_PLACE', payload }, '*');
-            setTimeout(()=>{ if(!STATE.placed && STATE.lastPlacePayload){ window.postMessage({type:'SIA_PLACE', payload:STATE.lastPlacePayload}, '*'); } }, 1200);
+            sendPlaceToMap(true);
           }catch(_){}
         }
 
