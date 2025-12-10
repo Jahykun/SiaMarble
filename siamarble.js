@@ -1,10 +1,12 @@
 // ==UserScript==
 // @name         SiaMarble — Auto-Color Placer for WPlace
 // @namespace    sia.marble
-// @version      3.5.0
+// @version      3.5.1
 // @description  Auto-Color Placer for WPlace
 // @author       Siacchy
 // @icon         https://raw.githubusercontent.com/Jahykun/SiaDBase/refs/heads/main/favicon.ico
+// @updateURL    https://raw.githubusercontent.com/Jahykun/SiaMarble/refs/heads/main/siamarble.js
+// @downloadURL  https://raw.githubusercontent.com/Jahykun/SiaMarble/refs/heads/main/siamarble.js
 // @match        https://wplace.live/*
 // @run-at       document-start
 // @grant        none
