@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SiaMarble — Auto-Color Placer for WPlace
 // @namespace    sia.marble
-// @version      3.5.2
+// @version      3.5.5
 // @description  Auto-Color Placer for WPlace
 // @author       Siacchy
 // @icon         https://raw.githubusercontent.com/Jahykun/SiaDBase/refs/heads/main/favicon.ico
@@ -166,12 +166,18 @@
   const LS_KEY = 'sia.marble.v1';
   const LS_OVERLAY_KEY = 'sia.marble.overlay';
   const LS_UI_THEME = 'sia.marble.uiTheme';
+  const FILE_BTN_DEFAULT = '📁 Upload Template (.png)';
+  const FILE_NAME_DEFAULT = '-  No file selected.  -';
   const STATE = {
     template:{canvas:null, ctx:null, w:0, h:0},
+    templateName:null,
     anchor:null, wantAnchorFromPaint:false,
     pmap:new Map(),
+    colorMeta:new Map(),
     overlay:{visible:true, opacity:0.6, mode:'full'},
-    ui:{root:null, body:null, hint:null, minBtn:null, clearBtn:null, fileBtn:null, fileName:null, overlayToggle:null, overlayRange:null, overlayVal:null, overlayStyle:null, overlayStyleRow:null, minimized:false, drag:{dx:0, dy:0, dragging:false}},
+    filters:{map:new Map(), counts:new Map()},
+    autoColor:false,
+    ui:{root:null, body:null, hint:null, minBtn:null, clearBtn:null, fileBtn:null, fileName:null, overlayToggle:null, overlayRange:null, overlayVal:null, overlayStyle:null, overlayStyleRow:null, colorList:null, autoColorCb:null, minimized:false, drag:{dx:0, dy:0, dragging:false}},
     lastPlacePayload:null, placed:false,
     pageOverlay:false
   };
@@ -182,7 +188,7 @@
     if(!Number.isFinite(n)) return STATE.overlay.opacity;
     return Math.min(1, Math.max(0, n));
   };
-  const normalizeMode=(v)=> v==='edges' ? 'edges' : 'full';
+  const normalizeMode=(v)=> v==='dots' || v==='edges' ? 'dots' : 'full';
   const getTheme=()=>{ try{ return localStorage.getItem('theme')||'light'; }catch(_){ return 'light'; } };
   const getUITheme=()=>{ try{ return localStorage.getItem(LS_UI_THEME)||getTheme()||'light'; }catch(_){ return 'light'; } };
   const setUITheme=(t)=>{ try{ localStorage.setItem(LS_UI_THEME, t); }catch(_){ } try{ localStorage.setItem('theme', t); }catch(_){ } };
@@ -234,24 +240,29 @@
   }
   function clearPersist(){
     try{ localStorage.removeItem(LS_KEY); }catch(_){}
+    try{ STATE.filters.map.clear(); STATE.filters.counts.clear(); if(STATE.ui.colorList) STATE.ui.colorList.innerHTML=''; }catch(_){}
   }
 
   // Palette (RGB→id)
   (function initPalette(){
-    const P=[[0,0,0,1],[60,60,60,2],[120,120,120,3],[210,210,210,4],[255,255,255,5],
-      [96,0,24,6],[237,28,36,7],[255,127,39,8],[246,170,9,9],[249,221,59,10],[255,250,188,11],
-      [14,185,104,12],[19,230,123,13],[135,255,94,14],[12,129,110,15],[16,174,166,16],
-      [19,225,190,17],[40,80,158,18],[64,147,228,19],[96,247,242,20],[107,80,246,21],
-      [153,177,251,22],[120,12,153,23],[170,56,185,24],[224,159,249,25],[203,0,122,26],
-      [236,31,128,27],[243,141,169,28],[104,70,52,29],[149,104,42,30],[248,178,119,31],
-      [170,170,170,32],[165,14,30,33],[250,128,114,34],[228,92,26,35],[214,181,148,36],
-      [156,132,49,37],[197,173,49,38],[232,212,95,39],[74,107,58,40],[90,148,74,41],
-      [132,197,115,42],[15,121,159,43],[187,250,242,44],[125,199,255,45],[77,49,184,46],
-      [74,66,132,47],[122,113,196,48],[181,174,241,49],[219,164,99,50],[209,128,81,51],
-      [255,197,165,52],[155,82,73,53],[209,128,120,54],[250,182,164,55],[123,99,82,56],
-      [156,132,107,57],[51,57,65,58],[109,117,141,59],[179,185,209,60],[109,100,63,61],
-      [148,140,107,62],[205,197,158,63]];
-    for(const [r,g,b,id] of P) STATE.pmap.set(`${r},${g},${b}`, id);
+    const P=[[0,0,0,1,"Black",false],[60,60,60,2,"Dark Gray",false],[120,120,120,3,"Gray",false],[210,210,210,4,"Light Gray",false],[255,255,255,5,"White",false],
+      [96,0,24,6,"Deep Red",false],[237,28,36,7,"Red",false],[255,127,39,8,"Orange",false],[246,170,9,9,"Gold",false],[249,221,59,10,"Yellow",false],[255,250,188,11,"Light Yellow",false],
+      [14,185,104,12,"Dark Green",false],[19,230,123,13,"Green",false],[135,255,94,14,"Light Green",false],[12,129,110,15,"Dark Teal",false],[16,174,166,16,"Teal",false],
+      [19,225,190,17,"Light Teal",false],[40,80,158,18,"Dark Blue",false],[64,147,228,19,"Blue",false],[96,247,242,20,"Cyan",false],[107,80,246,21,"Indigo",false],
+      [153,177,251,22,"Light Indigo",false],[120,12,153,23,"Dark Purple",false],[170,56,185,24,"Purple",false],[224,159,249,25,"Light Purple",false],[203,0,122,26,"Dark Pink",false],
+      [236,31,128,27,"Pink",false],[243,141,169,28,"Light Pink",false],[104,70,52,29,"Dark Brown",false],[149,104,42,30,"Brown",false],[248,178,119,31,"Beige",false],
+      [170,170,170,32,"Medium Gray",true],[165,14,30,33,"Dark Red",true],[250,128,114,34,"Light Red",true],[228,92,26,35,"Dark Orange",true],[214,181,148,36,"Light Tan",true],
+      [156,132,49,37,"Dark Goldenrod",true],[197,173,49,38,"Goldenrod",true],[232,212,95,39,"Light Goldenrod",true],[74,107,58,40,"Dark Olive",true],[90,148,74,41,"Olive",true],
+      [132,197,115,42,"Light Olive",true],[15,121,159,43,"Dark Cyan",true],[187,250,242,44,"Light Cyan",true],[125,199,255,45,"Light Blue",true],[77,49,184,46,"Dark Indigo",true],
+      [74,66,132,47,"Dark Slate Blue",true],[122,113,196,48,"Slate Blue",true],[181,174,241,49,"Light Slate Blue",true],[219,164,99,50,"Light Brown",true],[209,128,81,51,"Dark Beige",true],
+      [255,197,165,52,"Light Beige",true],[155,82,73,53,"Dark Peach",true],[209,128,120,54,"Peach",true],[250,182,164,55,"Light Peach",true],[123,99,82,56,"Dark Tan",true],
+      [156,132,107,57,"Tan",true],[51,57,65,58,"Dark Slate",true],[109,117,141,59,"Slate",true],[179,185,209,60,"Light Slate",true],[109,100,63,61,"Dark Stone",true],
+      [148,140,107,62,"Stone",true],[205,197,158,63,"Light Stone",true]];
+    for(const [r,g,b,id,name,premium] of P){
+      const key=`${r},${g},${b}`;
+      STATE.pmap.set(key, id);
+      STATE.colorMeta.set(key,{name, premium});
+    }
   })();
 
   // ---------------------- UI (stacked/compact + draggable + minimize + clear) ----------------------
@@ -275,8 +286,8 @@
       </div>
       <div id="sia-body" style="background:#0f172a;border:1px solid #1f2540;border-top:none;border-radius:0 0 10px 10px;padding:10px;display:flex;flex-direction:column;gap:8px;align-items:stretch;">
         <input id="sia-file" type="file" accept="image/png" style="display:none"/>
-        <button id="sia-file-btn" style="appearance:none;background:#111827;border:1px solid #374151;color:#e5e7eb;border-radius:8px;padding:6px 10px;cursor:pointer;text-align:center">📁 Upload Template (.png)</button>
-        <div id="sia-file-name" style="color:#9ca3af;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">-  No file selected.  -</div>
+        <button id="sia-file-btn" style="appearance:none;background:#111827;border:1px solid #374151;color:#e5e7eb;border-radius:8px;padding:6px 10px;cursor:pointer;text-align:center">${FILE_BTN_DEFAULT}</button>
+        <div id="sia-file-name" style="color:#9ca3af;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:none">${FILE_NAME_DEFAULT}</div>
         <div id="sia-overlay-ctrl" style="display:flex;flex-direction:column;gap:6px;">
           <button id="sia-overlay-toggle" style="background:#141a33;border:1px solid #263056;border-radius:8px;padding:6px 10px;color:#e5e7eb;cursor:pointer;">🙈 Hide Overlay</button>
           <div style="display:flex;align-items:center;gap:6px;color:#cbd5e1;font-size:11px;">
@@ -288,9 +299,14 @@
             <span style="min-width:52px;">Style</span>
             <select id="sia-overlay-style" style="flex:1;background:#111827;border:1px solid #374151;color:#e5e7eb;border-radius:6px;padding:4px 6px;">
               <option value="full">Full</option>
-              <option value="edges">Half</option>
+              <option value="dots">Dots</option>
             </select>
           </div>
+          <label style="display:flex;align-items:center;gap:6px;color:#cbd5e1;font-size:11px;">
+            <input id="sia-auto-color" type="checkbox" style="margin:0;"/>
+            <span>Auto-color placement</span>
+          </label>
+          <div id="sia-color-list" style="max-height:160px;overflow:auto;border:1px solid #263056;border-radius:6px;padding:6px;display:flex;flex-direction:column;gap:4px;color:#cbd5e1;font-size:11px;"></div>
         </div>
         <button id="sia-clear" title="Taslagi Kaldir" style="background:#3a1a1f;border:1px solid #6a2a33;color:#fecaca;border-radius:8px;padding:6px 10px;cursor:pointer">❌ Delete Template</button>
         <div id="sia-hint" style="color:#94a3b8;line-height:1.35;min-height:16px"></div>
@@ -309,6 +325,8 @@
     STATE.ui.overlayVal = wrap.querySelector('#sia-overlay-val');
     STATE.ui.overlayStyle = wrap.querySelector('#sia-overlay-style');
     STATE.ui.overlayStyleRow = wrap.querySelector('#sia-style-row');
+    STATE.ui.colorList = wrap.querySelector('#sia-color-list');
+    STATE.ui.autoColorCb = wrap.querySelector('#sia-auto-color');
     const themeToggleBtn = wrap.querySelector('#sia-theme-toggle');
     applyThemeToUI();
     if (STATE.ui.overlayRange){
@@ -410,14 +428,22 @@
       };
       STATE.ui.overlayStyle.addEventListener('change', (e)=>handleStyle(e.target.value));
     }
+    if (STATE.ui.autoColorCb){
+      STATE.ui.autoColorCb.checked = STATE.autoColor;
+      STATE.ui.autoColorCb.addEventListener('change', (e)=>{
+        STATE.autoColor = !!e.target.checked;
+      });
+    }
     // clear template
     STATE.ui.clearBtn.onclick = ()=>{
       try{ window.postMessage({type:'SIA_CLEAR'}, '*'); }catch(_){}
       STATE.template={canvas:null, ctx:null, w:0, h:0, alpha:null};
+      STATE.templateName=null;
       STATE.anchor=null; STATE.placed=false; STATE.wantAnchorFromPaint=false; STATE.lastPlacePayload=null;
       const fi=STATE.ui.fileBtn && STATE.ui.fileBtn.previousElementSibling;
       if(fi && fi.tagName==='INPUT') { try{ fi.value=''; }catch(_){ } }
       clearPersist();
+      setFileLabel(null);
       updateUIState('- Template Deleted. -');
     };
     // close
@@ -431,6 +457,7 @@
     STATE.ui.fileBtn.onclick = () => fileInput.click();
     fileInput.addEventListener('change', onPickPNG);
 
+    setFileLabel(null);
     // try restore
     restoreFromStorage();
     updateUIState();
@@ -438,6 +465,16 @@
   if (document.readyState==='loading') document.addEventListener('DOMContentLoaded', mountUI); else mountUI();
   // ensure default UI theme is recorded
   setUITheme(getUITheme());
+
+  function setFileLabel(name){
+    if(STATE.ui.fileBtn){
+      STATE.ui.fileBtn.textContent = name || FILE_BTN_DEFAULT;
+    }
+    if(STATE.ui.fileName){
+      STATE.ui.fileName.textContent = name ? '' : FILE_NAME_DEFAULT;
+      STATE.ui.fileName.style.display = 'none';
+    }
+  }
 
   function updateUIState(msg){
     applyThemeToUI();
@@ -455,8 +492,9 @@
     }
     if (STATE.ui.overlayRange){
       const pct=Math.round(STATE.overlay.opacity*100);
-      STATE.ui.overlayRange.disabled = !hasTpl || !STATE.overlay.visible;
-      STATE.ui.overlayRange.style.opacity = (hasTpl && STATE.overlay.visible) ? '1' : '.5';
+      const showCtrl = hasTpl && STATE.overlay.visible;
+      STATE.ui.overlayRange.disabled = !showCtrl;
+      STATE.ui.overlayRange.style.opacity = showCtrl ? '1' : '.5';
       STATE.ui.overlayRange.value = pct;
       if (STATE.ui.overlayVal) STATE.ui.overlayVal.textContent=`${pct}%`;
     }
@@ -466,8 +504,21 @@
       STATE.ui.overlayStyleRow.style.display = showStyle ? 'flex' : 'none';
       STATE.ui.overlayStyle.value = normalizeMode(STATE.overlay.mode);
     }
-    if (!hasTpl) {
-      if (STATE.ui.fileName) STATE.ui.fileName.textContent = '-  No file selected.  -';
+    if (STATE.ui.colorList){
+      const showColors = hasTpl && STATE.overlay.visible;
+      STATE.ui.colorList.style.display = showColors ? 'flex' : 'none';
+    }
+    if (STATE.ui.autoColorCb){
+      STATE.ui.autoColorCb.disabled = !hasTpl;
+      STATE.ui.autoColorCb.checked = STATE.autoColor;
+      const showAuto = hasTpl && STATE.overlay.visible;
+      STATE.ui.autoColorCb.parentElement.style.opacity = showAuto ? '1' : '.5';
+      STATE.ui.autoColorCb.parentElement.style.display = showAuto ? 'flex' : 'none';
+    }
+    if (hasTpl) {
+      setFileLabel(STATE.templateName || FILE_BTN_DEFAULT);
+    } else {
+      setFileLabel(null);
     }
     if (msg) hint(msg);
   }
@@ -498,6 +549,92 @@
     styleBtn(clearBtn,'#fee2e2','#fca5a5','#991b1b');
   }
 
+  function rebuildColorFilters(){
+    const counts=new Map();
+    const filters=new Map();
+    try{
+      const c=STATE.template.canvas, ctx=STATE.template.ctx;
+      if(c && ctx){
+        const data=ctx.getImageData(0,0,c.width,c.height).data;
+        for(let i=0;i<data.length;i+=4){
+          const a=data[i+3]; if(a<128) continue;
+          const key=`${data[i]},${data[i+1]},${data[i+2]}`;
+          counts.set(key,(counts.get(key)||0)+1);
+        }
+        for(const k of counts.keys()) filters.set(k,true);
+      }
+    }catch(_){}
+    STATE.filters.counts=counts;
+    STATE.filters.map=filters;
+    renderColorList();
+  }
+
+  function renderColorList(){
+    const list=STATE.ui.colorList;
+    if(!list) return;
+    list.innerHTML='';
+    const entries=Array.from(STATE.filters.counts.entries()).sort((a,b)=>b[1]-a[1]);
+    if(!entries.length){
+      list.innerHTML='<small>No colors</small>';
+      return;
+    }
+    const controls=document.createElement('div');
+    controls.style.display='flex';
+    controls.style.gap='6px';
+    controls.style.marginBottom='4px';
+    const enBtn=document.createElement('button');
+    enBtn.textContent='Enable All';
+    enBtn.style.flex='1';
+    enBtn.style.background='#111827';
+    enBtn.style.border='1px solid #374151';
+    enBtn.style.color='#e5e7eb';
+    enBtn.style.borderRadius='6px';
+    enBtn.style.padding='4px 6px';
+    enBtn.style.cursor='pointer';
+    enBtn.onclick=()=>{ for(const k of STATE.filters.map.keys()) STATE.filters.map.set(k,true); renderColorList(); if(STATE.overlay.visible && STATE.lastPlacePayload){ sendPlaceToMap(false); } };
+    const disBtn=document.createElement('button');
+    disBtn.textContent='Disable All';
+    disBtn.style.flex='1';
+    disBtn.style.background='#111827';
+    disBtn.style.border='1px solid #374151';
+    disBtn.style.color='#e5e7eb';
+    disBtn.style.borderRadius='6px';
+    disBtn.style.padding='4px 6px';
+    disBtn.style.cursor='pointer';
+    disBtn.onclick=()=>{ for(const k of STATE.filters.map.keys()) STATE.filters.map.set(k,false); renderColorList(); if(STATE.overlay.visible && STATE.lastPlacePayload){ sendPlaceToMap(false); } };
+    controls.appendChild(enBtn); controls.appendChild(disBtn);
+    list.appendChild(controls);
+    for(const [key,count] of entries){
+      const row=document.createElement('div');
+      row.style.display='flex';
+      row.style.alignItems='center';
+      row.style.gap='6px';
+      row.style.justifyContent='space-between';
+      const sw=document.createElement('div');
+      sw.style.width='14px'; sw.style.height='14px';
+      sw.style.border='1px solid rgba(255,255,255,0.4)';
+      sw.style.background=`rgb(${key})`;
+      const label=document.createElement('span');
+      const meta=STATE.colorMeta.get(key) || {};
+      const prefix=meta.premium?'❤ ':'';
+      const name=meta.name||key;
+      label.textContent=`${prefix}${name} (${count})`;
+      label.style.flex='1';
+      label.style.color='#cbd5e1';
+      const cb=document.createElement('input');
+      cb.type='checkbox';
+      cb.checked = STATE.filters.map.get(key)!==false;
+      cb.onchange=()=>{
+        STATE.filters.map.set(key, cb.checked);
+        if(STATE.overlay.visible && STATE.lastPlacePayload){ sendPlaceToMap(false); }
+      };
+      row.appendChild(cb);
+      row.appendChild(sw);
+      row.appendChild(label);
+      list.appendChild(row);
+    }
+  }
+
   function parseTileXY(url){
     try{
       const mm=/\/tiles\/(\d+)\/(\d+)\.png/i.exec(url);
@@ -513,6 +650,8 @@
   async function blendTileWithTemplate(blob, tileX, tileY, contentType){
     if(!STATE.template.canvas || !STATE.anchor || !STATE.overlay.visible) return blob;
     const mix=STATE.overlay.opacity;
+    const colorFilter=STATE.filters.map;
+    const dotMode=STATE.overlay.mode==='dots';
     const img=await createImageBitmap(blob);
     const tw=img.width, th=img.height;
     const canvas=document.createElement('canvas');
@@ -565,31 +704,40 @@
         const ow=overlapRight - overlapLeft;
         const oh=overlapBottom - overlapTop;
         const tplData=STATE.template.ctx.getImageData(tplOffsetX, tplOffsetY, ow, oh).data;
-        const tileImg=ctx.getImageData(tileOffsetX, tileOffsetY, ow, oh);
-        const td=tileImg.data;
-        for(let i=0;i<tplData.length;i+=4){
-          const a=tplData[i+3];
-          if(a<128) continue;
-          const r=tplData[i], g=tplData[i+1], b=tplData[i+2];
-          let useMix = mix;
-          if(mode==='edges' && alphaArr){
+        if(dotMode){
+          ctx.save();
+          ctx.imageSmoothingEnabled=false;
+          const size=0.4;
+          for(let i=0;i<tplData.length;i+=4){
+            const a=tplData[i+3];
+            if(a<128) continue;
+            const r=tplData[i], g=tplData[i+1], b=tplData[i+2];
+            if(colorFilter && colorFilter.has(`${r},${g},${b}`) && colorFilter.get(`${r},${g},${b}`)===false) continue;
             const idx=i/4;
             const lx=tplOffsetX + (idx % ow);
             const ly=tplOffsetY + Math.floor(idx / ow);
-            const baseIndex = (ly*tplW + lx)*4 + 3;
-            const leftA  = lx>0 ? alphaArr[baseIndex - 4] : 0;
-            const rightA = lx<tplW-1 ? alphaArr[baseIndex + 4] : 0;
-            const upA    = ly>0 ? alphaArr[baseIndex - tplW*4] : 0;
-            const downA  = ly<tplH-1 ? alphaArr[baseIndex + tplW*4] : 0;
-            const isEdge = (leftA<128)||(rightA<128)||(upA<128)||(downA<128);
-            useMix = isEdge ? Math.min(1, mix*1.1) : Math.min(1, mix*0.65);
+            const tx=tileOffsetX + lx + 0.5 - size/2;
+            const ty=tileOffsetY + ly + 0.5 - size/2;
+            ctx.fillStyle=`rgba(${r},${g},${b},${(a/255)*mix})`;
+            ctx.fillRect(tx, ty, size, size);
           }
-          td[i]   = Math.round(td[i]   * (1-useMix) + r * useMix);
-          td[i+1] = Math.round(td[i+1] * (1-useMix) + g * useMix);
-          td[i+2] = Math.round(td[i+2] * (1-useMix) + b * useMix);
-          td[i+3] = Math.max(td[i+3], Math.round(a * useMix));
+          ctx.restore();
+        }else{
+          const tileImg=ctx.getImageData(tileOffsetX, tileOffsetY, ow, oh);
+          const td=tileImg.data;
+          for(let i=0;i<tplData.length;i+=4){
+            const a=tplData[i+3];
+            if(a<128) continue;
+            const r=tplData[i], g=tplData[i+1], b=tplData[i+2];
+            if(colorFilter && colorFilter.has(`${r},${g},${b}`) && colorFilter.get(`${r},${g},${b}`)===false) continue;
+            const useMix = mix;
+            td[i]   = Math.round(td[i]   * (1-useMix) + r * useMix);
+            td[i+1] = Math.round(td[i+1] * (1-useMix) + g * useMix);
+            td[i+2] = Math.round(td[i+2] * (1-useMix) + b * useMix);
+            td[i+3] = Math.max(td[i+3], Math.round(a * useMix));
+          }
+          ctx.putImageData(tileImg, tileOffsetX, tileOffsetY);
         }
-        ctx.putImageData(tileImg, tileOffsetX, tileOffsetY);
       }
     }
 
@@ -627,7 +775,9 @@
       const ctx=c.getContext('2d',{willReadFrequently:true});
       ctx.imageSmoothingEnabled=false; ctx.drawImage(img,0,0);
       STATE.template={canvas:c, ctx, w:c.width, h:c.height, alpha:ctx.getImageData(0,0,c.width,c.height).data};
-      if (STATE.ui.fileName) STATE.ui.fileName.textContent = `Template Uploaded (${c.width}×${c.height})`;
+      rebuildColorFilters();
+      STATE.templateName = `Template Uploaded (${c.width}×${c.height})`;
+      setFileLabel(STATE.templateName);
       if (saved.a && Number.isFinite(saved.a.gx) && Number.isFinite(saved.a.gy)) {
         STATE.anchor={gx:Number(saved.a.gx), gy:Number(saved.a.gy)};
         hint(`Placing Template...`);
@@ -636,7 +786,7 @@
         sendPlaceToMap(true);
       } else {
         STATE.wantAnchorFromPaint=true;
-        hint(`✅ Coordinates: ${gx}, ${gy}`);
+        hint(`🎯 Paint a pixel to set anchor.`);
       }
       updateUIState();
     };
@@ -653,9 +803,11 @@
     const ctx=c.getContext('2d',{willReadFrequently:true});
     ctx.imageSmoothingEnabled=false; ctx.drawImage(img,0,0);
     STATE.template={canvas:c, ctx, w:c.width, h:c.height, alpha:ctx.getImageData(0,0,c.width,c.height).data};
+    rebuildColorFilters();
+    STATE.templateName = f.name || `${c.width}×${c.height}`;
     STATE.anchor=null; STATE.wantAnchorFromPaint=true; STATE.placed=false; STATE.lastPlacePayload=null;
     clearOverlayOnMap();
-    if (STATE.ui.fileName) STATE.ui.fileName.textContent = f.name || `${c.width}×${c.height}`;
+    setFileLabel(STATE.templateName);
     savePersist(); // WHY: PNG’yi kalıcı tutmak için
     hint(`🎨 Paint a pixel to set template. (${c.width}×${c.height})`);
     updateUIState();
@@ -719,7 +871,7 @@
         }
 
         // Auto-color patch
-        if (STATE.template.ctx && STATE.anchor && Array.isArray(obj.coords) && Array.isArray(obj.colors)){
+        if (STATE.autoColor && STATE.template.ctx && STATE.anchor && Array.isArray(obj.coords) && Array.isArray(obj.colors)){
           const coords=obj.coords, colors=obj.colors.slice();
           for (let i=0,j=0;i<coords.length;i+=2,j++){
             const x=Number(coords[i]), y=Number(coords[i+1]);
@@ -745,4 +897,3 @@
   })();
 
 })();
-
