@@ -1,9 +1,9 @@
 // ==UserScript==
 // @name         SiaMarble — Auto-Color Placer for WPlace
 // @namespace    sia.marble
-// @version      3.5.5
-// @description  Auto-Color Placer for WPlace
-// @author       Siacchy
+// @version      3.7.2
+// @description  Auto-Color Placer for WPlace (Full Dots, Half Dots & Fixes)
+// @author       Siacchy (Fixed by Claudai)
 // @icon         https://raw.githubusercontent.com/Jahykun/SiaDBase/refs/heads/main/favicon.ico
 // @updateURL    https://raw.githubusercontent.com/Jahykun/SiaMarble/refs/heads/main/siamarble.js
 // @downloadURL  https://raw.githubusercontent.com/Jahykun/SiaMarble/refs/heads/main/siamarble.js
@@ -115,6 +115,7 @@
       var show = payload.visible!==false;
       if(!show){ clearLayers(); return; }
 
+      // Use opacity from payload, not from state, as payload comes from state
       var opacity=1;
       if(typeof payload.opacity==='number' && isFinite(payload.opacity)){
         opacity=Math.min(1, Math.max(0, payload.opacity));
@@ -138,6 +139,7 @@
       clearLayers();
       try{
         S.map.addSource(SRC_IMG,{ type:'image', url:dataUrl, coordinates:quad });
+        // Raster layer now uses the opacity passed from the userscript
         S.map.addLayer({ id:LAYER_RASTER, type:'raster', source:SRC_IMG, paint:{ 'raster-resampling':'nearest','raster-opacity':opacity } });
         PLOG('image source OK');
         S.placed=true;
@@ -173,6 +175,7 @@
     templateName:null,
     anchor:null, wantAnchorFromPaint:false,
     pmap:new Map(),
+    paletteList:[], // Added for nearest color lookup
     colorMeta:new Map(),
     overlay:{visible:true, opacity:0.6, mode:'full'},
     filters:{map:new Map(), counts:new Map()},
@@ -188,7 +191,11 @@
     if(!Number.isFinite(n)) return STATE.overlay.opacity;
     return Math.min(1, Math.max(0, n));
   };
-  const normalizeMode=(v)=> v==='dots' || v==='edges' ? 'dots' : 'full';
+  // Mode normalizer: supports full, dots (full dots), half_dots
+  const normalizeMode=(v)=>{
+    if(v==='dots' || v==='half_dots') return v;
+    return 'full';
+  };
   const getTheme=()=>{ try{ return localStorage.getItem('theme')||'light'; }catch(_){ return 'light'; } };
   const getUITheme=()=>{ try{ return localStorage.getItem(LS_UI_THEME)||getTheme()||'light'; }catch(_){ return 'light'; } };
   const setUITheme=(t)=>{ try{ localStorage.setItem(LS_UI_THEME, t); }catch(_){ } try{ localStorage.setItem('theme', t); }catch(_){ } };
@@ -245,6 +252,7 @@
 
   // Palette (RGB→id)
   (function initPalette(){
+    // [R, G, B, ID, Name, Premium]
     const P=[[0,0,0,1,"Black",false],[60,60,60,2,"Dark Gray",false],[120,120,120,3,"Gray",false],[210,210,210,4,"Light Gray",false],[255,255,255,5,"White",false],
       [96,0,24,6,"Deep Red",false],[237,28,36,7,"Red",false],[255,127,39,8,"Orange",false],[246,170,9,9,"Gold",false],[249,221,59,10,"Yellow",false],[255,250,188,11,"Light Yellow",false],
       [14,185,104,12,"Dark Green",false],[19,230,123,13,"Green",false],[135,255,94,14,"Light Green",false],[12,129,110,15,"Dark Teal",false],[16,174,166,16,"Teal",false],
@@ -258,12 +266,37 @@
       [255,197,165,52,"Light Beige",true],[155,82,73,53,"Dark Peach",true],[209,128,120,54,"Peach",true],[250,182,164,55,"Light Peach",true],[123,99,82,56,"Dark Tan",true],
       [156,132,107,57,"Tan",true],[51,57,65,58,"Dark Slate",true],[109,117,141,59,"Slate",true],[179,185,209,60,"Light Slate",true],[109,100,63,61,"Dark Stone",true],
       [148,140,107,62,"Stone",true],[205,197,158,63,"Light Stone",true]];
+    
+    STATE.paletteList = P; // Expose palette for closest color search
     for(const [r,g,b,id,name,premium] of P){
       const key=`${r},${g},${b}`;
       STATE.pmap.set(key, id);
       STATE.colorMeta.set(key,{name, premium});
     }
   })();
+
+  // --- Helper: Find closest palette color ---
+  function findClosestColor(r, g, b) {
+    let minDist = Infinity;
+    let closestKey = null;
+    let closestRGB = [r, g, b];
+
+    // Threshold can be adjusted. 0 = exact match needed.
+    // If the image has compression artifacts, this helps snap to palette.
+    
+    for (const [pr, pg, pb, id, name, premium] of STATE.paletteList) {
+      const dr = r - pr;
+      const dg = g - pg;
+      const db = b - pb;
+      const dist = dr*dr + dg*dg + db*db;
+      if (dist < minDist) {
+        minDist = dist;
+        closestKey = `${pr},${pg},${pb}`;
+        closestRGB = [pr, pg, pb];
+      }
+    }
+    return closestKey || `${r},${g},${b}`;
+  }
 
   // ---------------------- UI (stacked/compact + draggable + minimize + clear) ----------------------
   function mountUI(){
@@ -299,7 +332,8 @@
             <span style="min-width:52px;">Style</span>
             <select id="sia-overlay-style" style="flex:1;background:#111827;border:1px solid #374151;color:#e5e7eb;border-radius:6px;padding:4px 6px;">
               <option value="full">Full</option>
-              <option value="dots">Dots</option>
+              <option value="dots">Full Dots (Clear)</option>
+              <option value="half_dots">Half Dots (Bg)</option>
             </select>
           </div>
           <label style="display:flex;align-items:center;gap:6px;color:#cbd5e1;font-size:11px;">
@@ -333,9 +367,6 @@
       const pct=Math.round(STATE.overlay.opacity*100);
       STATE.ui.overlayRange.value=pct;
       if(STATE.ui.overlayVal) STATE.ui.overlayVal.textContent=`${pct}%`;
-    }
-    if (STATE.ui.overlayStyle){
-      STATE.ui.overlayStyle.value = normalizeMode(STATE.overlay.mode);
     }
     if (STATE.ui.overlayStyle){
       STATE.ui.overlayStyle.value = normalizeMode(STATE.overlay.mode);
@@ -414,6 +445,7 @@
         STATE.overlay.opacity=clampOpacity(pct/100);
         saveOverlayPrefs();
         updateUIState();
+        // Force redraw of the map overlay for new opacity
         if(STATE.overlay.visible && STATE.lastPlacePayload){ sendPlaceToMap(false); }
       };
       STATE.ui.overlayRange.addEventListener('input', (e)=>handleOpacity(e.target.value));
@@ -424,6 +456,7 @@
         STATE.overlay.mode=normalizeMode(val);
         saveOverlayPrefs();
         updateUIState();
+        // Force redraw of the map overlay for new style
         if(STATE.overlay.visible && STATE.lastPlacePayload){ sendPlaceToMap(false); }
       };
       STATE.ui.overlayStyle.addEventListener('change', (e)=>handleStyle(e.target.value));
@@ -558,7 +591,11 @@
         const data=ctx.getImageData(0,0,c.width,c.height).data;
         for(let i=0;i<data.length;i+=4){
           const a=data[i+3]; if(a<128) continue;
-          const key=`${data[i]},${data[i+1]},${data[i+2]}`;
+          
+          // Use Nearest Neighbor to snap to palette
+          const r = data[i], g = data[i+1], b = data[i+2];
+          const key = findClosestColor(r, g, b); // Snap to palette
+          
           counts.set(key,(counts.get(key)||0)+1);
         }
         for(const k of counts.keys()) filters.set(k,true);
@@ -649,21 +686,42 @@
 
   async function blendTileWithTemplate(blob, tileX, tileY, contentType){
     if(!STATE.template.canvas || !STATE.anchor || !STATE.overlay.visible) return blob;
-    const mix=STATE.overlay.opacity;
+    const mix=STATE.overlay.opacity; // Opacity value (0.0 to 1.0)
     const colorFilter=STATE.filters.map;
-    const dotMode=STATE.overlay.mode==='dots';
+    
+    // Modes:
+    // 'full' -> Standard pixel blending (1:1)
+    // 'dots' -> Full Dots (Clear background) (4:1) - İstenen net dot modu
+    // 'half_dots' -> Half Dots (Image background + Dots) (4:1)
+    const mode = normalizeMode(STATE.overlay.mode);
+    const isDots = mode === 'dots' || mode === 'half_dots';
+    
+    // UPRADE: Eğer Dots modundaysak, çözünürlüğü yükselterek (Upscale) "gerçek" noktalar çizeceğiz.
+    const SCALE = isDots ? 4 : 1;
+
     const img=await createImageBitmap(blob);
     const tw=img.width, th=img.height;
+    
+    // Create new canvas for blending. Its size depends on SCALE.
     const canvas=document.createElement('canvas');
-    canvas.width=tw; canvas.height=th;
+    canvas.width=tw * SCALE; 
+    canvas.height=th * SCALE;
+    
     const ctx=canvas.getContext('2d',{willReadFrequently:true});
     ctx.imageSmoothingEnabled=false;
-    ctx.drawImage(img,0,0,tw,th);
+    
+    // 1. Draw the base map tile image.
+    // For 'dots' (Full Dots/Clear), we leave the background transparent (nothing drawn here).
+    // For 'full' or 'half_dots', we draw the map image.
+    if (mode === 'full' || mode === 'half_dots') {
+      // Draw map image scaled up for better quality in half_dots mode, or 1:1 in full mode
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+    }
 
     const tplW=STATE.template.w, tplH=STATE.template.h;
     const tplLeft=STATE.anchor.gx, tplTop=STATE.anchor.gy;
     const WORLD=4000;
-    const mode=normalizeMode(STATE.overlay.mode);
+    
     const alphaArr=STATE.template.alpha;
 
     function buildSegments(start, size){
@@ -704,64 +762,117 @@
         const ow=overlapRight - overlapLeft;
         const oh=overlapBottom - overlapTop;
         const tplData=STATE.template.ctx.getImageData(tplOffsetX, tplOffsetY, ow, oh).data;
-        if(dotMode){
-          ctx.save();
-          ctx.imageSmoothingEnabled=false;
-          const size=0.4;
-          for(let i=0;i<tplData.length;i+=4){
-            const a=tplData[i+3];
-            if(a<128) continue;
-            const r=tplData[i], g=tplData[i+1], b=tplData[i+2];
-            if(colorFilter && colorFilter.has(`${r},${g},${b}`) && colorFilter.get(`${r},${g},${b}`)===false) continue;
-            const idx=i/4;
-            const lx=tplOffsetX + (idx % ow);
-            const ly=tplOffsetY + Math.floor(idx / ow);
-            const tx=tileOffsetX + lx + 0.5 - size/2;
-            const ty=tileOffsetY + ly + 0.5 - size/2;
-            ctx.fillStyle=`rgba(${r},${g},${b},${(a/255)*mix})`;
-            ctx.fillRect(tx, ty, size, size);
-          }
-          ctx.restore();
-        }else{
-          const tileImg=ctx.getImageData(tileOffsetX, tileOffsetY, ow, oh);
-          const td=tileImg.data;
-          for(let i=0;i<tplData.length;i+=4){
-            const a=tplData[i+3];
-            if(a<128) continue;
-            const r=tplData[i], g=tplData[i+1], b=tplData[i+2];
-            if(colorFilter && colorFilter.has(`${r},${g},${b}`) && colorFilter.get(`${r},${g},${b}`)===false) continue;
-            const useMix = mix;
-            td[i]   = Math.round(td[i]   * (1-useMix) + r * useMix);
-            td[i+1] = Math.round(td[i+1] * (1-useMix) + g * useMix);
-            td[i+2] = Math.round(td[i+2] * (1-useMix) + b * useMix);
-            td[i+3] = Math.max(td[i+3], Math.round(a * useMix));
-          }
-          ctx.putImageData(tileImg, tileOffsetX, tileOffsetY);
+        
+        if(isDots){
+            // DOTS MODE: Use SCALE logic
+            // Dot size is roughly 65% of the full block.
+            // On SCALE=4, a full block is 4x4.
+            const dotSize = SCALE * 0.65;
+            const offset = (SCALE - dotSize) / 2;
+            
+            // For 'half_dots', we might want to blend the map and then draw dots.
+            // Since we already drew the base map (scaled up) above for 'half_dots',
+            // now we only need to draw the dots on top.
+
+            for(let i=0;i<tplData.length;i+=4){
+                const a=tplData[i+3];
+                if(a<128) continue;
+                const r=tplData[i], g=tplData[i+1], b=tplData[i+2];
+                // Color filtering check:
+                const closestKey = findClosestColor(r, g, b); 
+                if(colorFilter && colorFilter.has(closestKey) && colorFilter.get(closestKey)===false) continue;
+                
+                const col = (i / 4) % ow;
+                const row = Math.floor((i / 4) / ow);
+
+                const drawX = (tileOffsetX + col) * SCALE + offset;
+                const drawY = (tileOffsetY + row) * SCALE + offset;
+                
+                // Opaklık (mix) ayarını buraya uygula. 
+                // Dot rengi tamamen opak kalırken, dot'un genel şeffaflığı mix ile kontrol edilir.
+                ctx.fillStyle=`rgba(${r},${g},${b},${(a/255) * mix})`; 
+                ctx.fillRect(drawX, drawY, dotSize, dotSize);
+            }
+        } else {
+            // FULL MODE: Standard pixel manipulation (SCALE=1)
+            // Retrieve current image data (which includes the base map image drawn previously)
+            const tileImg=ctx.getImageData(tileOffsetX, tileOffsetY, ow, oh);
+            const td=tileImg.data;
+            for(let i=0;i<tplData.length;i+=4){
+                const a=tplData[i+3];
+                if(a<128) continue;
+                const r=tplData[i], g=tplData[i+1], b=tplData[i+2];
+                // Color filtering check:
+                const closestKey = findClosestColor(r, g, b);
+                if(colorFilter && colorFilter.has(closestKey) && colorFilter.get(closestKey)===false) continue;
+
+                const useMix = mix;
+                // Alpha (a) is the template pixel's opacity. useMix is the overlay's global opacity.
+                // We use the full mix value for blending, regardless of the template's alpha,
+                // but only apply blending if template alpha is sufficient (>128).
+                td[i]   = Math.round(td[i]   * (1-useMix) + r * useMix);
+                td[i+1] = Math.round(td[i+1] * (1-useMix) + g * useMix);
+                td[i+2] = Math.round(td[i+2] * (1-useMix) + b * useMix);
+                // Ensure the final tile pixel is at least as opaque as the template mix
+                td[i+3] = Math.max(td[i+3], Math.round(a * useMix)); 
+            }
+            ctx.putImageData(tileImg, tileOffsetX, tileOffsetY);
         }
       }
     }
 
+    // Convert the final canvas back to a Blob
     const out=await new Promise((res)=>canvas.toBlob((b)=>res(b||blob), contentType||'image/png'));
     return out || blob;
   }
 
   function sendPlaceToMap(withRetry){
     if(!STATE.lastPlacePayload) return;
-    const payload=Object.assign({}, STATE.lastPlacePayload, { opacity: STATE.overlay.opacity, visible: STATE.overlay.visible });
+    
+    // Check if current mode is one of the dot modes
+    const mode = normalizeMode(STATE.overlay.mode);
+    const isDotMode = mode === 'dots' || mode === 'half_dots';
+
+    let payload;
+    
+    if (isDotMode) {
+        // Dot modlarında, overlay'i göstermek için (Maplibre'ye iletilen katman)
+        // şeffaflık (opacity) ayarını haritada kullanmayız, 
+        // çünkü dot çizimi canvas patch'inde gerçekleşiyor.
+        // Opaklık ayarını sadece canvas patch'inde kullanıyoruz.
+        // Bu yüzden Maplibre'ye iletilen payload'da opacity'i 1.0 (tamamen opak)
+        // bırakıyoruz ve `dataUrl` alanını boşaltıyoruz. 
+        // Tile fetch patch'i (blendTileWithTemplate) çalışması için `visible: true` yeterlidir.
+        payload = Object.assign({}, STATE.lastPlacePayload, { opacity: 1.0, visible: STATE.overlay.visible, dataUrl: '' });
+        STATE.pageOverlay = false; // Disable Maplibre layer
+    } else {
+        // Full modunda, Maplibre'nin kendi raster layer'ını kullanıyoruz
+        // ve opaklığı doğrudan Maplibre'ye iletiyoruz.
+        payload = Object.assign({}, STATE.lastPlacePayload, { opacity: STATE.overlay.opacity, visible: STATE.overlay.visible });
+        STATE.pageOverlay = true; // Enable Maplibre layer
+    }
+    
     if(!STATE.overlay.visible){
       clearOverlayOnMap();
       return;
     }
-    STATE.placed=false;
-    if(STATE.pageOverlay){
-      try{ window.postMessage({ type:'SIA_PLACE', payload }, '*'); }catch(_){}
-      if(withRetry){
-        setTimeout(()=>{
-          if(!STATE.placed && STATE.overlay.visible && STATE.lastPlacePayload){
-            try{ window.postMessage({ type:'SIA_PLACE', payload:Object.assign({}, STATE.lastPlacePayload, { opacity: STATE.overlay.opacity, visible:true }) }, '*'); }catch(_){}
-          }
-        }, 1200);
-      }
+
+    // If pageOverlay is true (Full mode), send the image to Maplibre
+    if (STATE.pageOverlay) {
+        STATE.placed = false;
+        try{ window.postMessage({ type:'SIA_PLACE', payload }, '*'); }catch(_){}
+        if(withRetry){
+            setTimeout(()=>{
+                if(!STATE.placed && STATE.overlay.visible && STATE.pageOverlay){
+                    try{ window.postMessage({ type:'SIA_PLACE', payload }, '*'); }catch(_){}
+                }
+            }, 1200);
+        }
+    } else {
+        // If pageOverlay is false (Dot modes), ensure Maplibre layer is cleared
+        // and rely only on the fetch patch for rendering.
+        clearOverlayOnMap();
+        STATE.placed = true; // Mark as placed so retry logic doesn't interfere
     }
   }
 
@@ -781,6 +892,8 @@
       if (saved.a && Number.isFinite(saved.a.gx) && Number.isFinite(saved.a.gy)) {
         STATE.anchor={gx:Number(saved.a.gx), gy:Number(saved.a.gy)};
         hint(`Placing Template...`);
+        // Note: For restoration, we always pass the DataURL here, 
+        // but `sendPlaceToMap` will clear it if in dot mode.
         const payload = { dataUrl: saved.t, gx:STATE.anchor.gx, gy:STATE.anchor.gy, w:c.width, h:c.height };
         STATE.lastPlacePayload = payload;
         sendPlaceToMap(true);
@@ -830,15 +943,18 @@
         const tileMatch = parseTileXY(url);
 
         // Tile overlay (image responses)
+        // Dot modları da dahil olmak üzere template varsa ve visible ise devreye girer
         if(method==='GET' && tileMatch && STATE.template.canvas && STATE.anchor && STATE.overlay.visible){
           const res=await orig.apply(this, arguments);
           const ctype=res.headers?.get('content-type')||'';
           if(!ctype.includes('image')) return res;
           try{
             const baseBlob=await res.clone().blob();
+            // blendTileWithTemplate now handles all modes (full/dots/half_dots) and opacity
             const blended=await blendTileWithTemplate(baseBlob, tileMatch[0], tileMatch[1], ctype);
             return new Response(blended, { status:res.status, statusText:res.statusText, headers:res.headers });
-          }catch(_){
+          }catch(e){
+            console.error('[SiaMarble] Blend failed:', e);
             return res;
           }
         }
@@ -882,7 +998,9 @@
             if(lx>=0 && ly>=0 && lx<STATE.template.w && ly<STATE.template.h){
               const d=STATE.template.ctx.getImageData(lx,ly,1,1).data;
               if(d[3]>=128){
-                const id=STATE.pmap.get(`${d[0]},${d[1]},${d[2]}`);
+                // USE CLOSEST COLOR LOOKUP HERE TOO
+                const closestKey = findClosestColor(d[0], d[1], d[2]);
+                const id=STATE.pmap.get(closestKey);
                 if(id!=null) colors[j]=Number(id);
               }
             }
