@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SiaMarble — Auto-Color Placer for WPlace
 // @namespace    sia.marble
-// @version      3.5.1
+// @version      3.5.2
 // @description  Auto-Color Placer for WPlace
 // @author       Siacchy
 // @icon         https://raw.githubusercontent.com/Jahykun/SiaDBase/refs/heads/main/favicon.ico
@@ -745,3 +745,4 @@
   })();
 
 })();
+
