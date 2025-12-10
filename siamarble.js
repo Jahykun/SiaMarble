@@ -3,6 +3,8 @@
 // @namespace    sia.marble
 // @version      3.5.0
 // @description  Auto-Color Placer for WPlace
+// @author       Siacchy
+// @icon         https://raw.githubusercontent.com/Jahykun/SiaDBase/refs/heads/main/favicon.ico
 // @match        https://wplace.live/*
 // @run-at       document-start
 // @grant        none
@@ -161,6 +163,7 @@
   // ---------------------- USERSCRIPT (sandbox) ----------------------
   const LS_KEY = 'sia.marble.v1';
   const LS_OVERLAY_KEY = 'sia.marble.overlay';
+  const LS_UI_THEME = 'sia.marble.uiTheme';
   const STATE = {
     template:{canvas:null, ctx:null, w:0, h:0},
     anchor:null, wantAnchorFromPaint:false,
@@ -178,6 +181,21 @@
     return Math.min(1, Math.max(0, n));
   };
   const normalizeMode=(v)=> v==='edges' ? 'edges' : 'full';
+  const getTheme=()=>{ try{ return localStorage.getItem('theme')||'light'; }catch(_){ return 'light'; } };
+  const getUITheme=()=>{ try{ return localStorage.getItem(LS_UI_THEME)||getTheme()||'light'; }catch(_){ return 'light'; } };
+  const setUITheme=(t)=>{ try{ localStorage.setItem(LS_UI_THEME, t); }catch(_){ } try{ localStorage.setItem('theme', t); }catch(_){ } };
+  function applyThemeToUI(){
+    const theme=getUITheme();
+    const refs={
+      wrap:STATE.ui.root,
+      head:STATE.ui.root?.querySelector('#sia-head'),
+      body:STATE.ui.body,
+      fileBtn:STATE.ui.fileBtn,
+      clearBtn:STATE.ui.clearBtn,
+      overlayToggle:STATE.ui.overlayToggle
+    };
+    applyUITheme(theme, refs);
+  }
 
   loadOverlayPrefs();
 
@@ -245,7 +263,9 @@
 
     wrap.innerHTML = `
       <div id="sia-head" style="user-select:none;background:#0b1020;border:1px solid #1f2540;border-radius:10px 10px 0 0;padding:8px 10px;display:flex;align-items:center;gap:8px;cursor:grab;">
-        <strong style="font-weight:600;letter-spacing:.2px;">❤ SiaMarble ❤</strong>
+        <strong style="font-weight:600;letter-spacing:.2px;display:flex;align-items:center;gap:6px;">❤ SiaMarble ❤
+          <button id="sia-theme-toggle" title="Switch theme" style="background:#111827;border:1px solid #263056;border-radius:6px;padding:2px 6px;color:#cbd5e1;cursor:pointer;">🌙</button>
+        </strong>
         <div style="margin-left:auto;display:flex;gap:6px;">
           <button id="sia-min" title="küçült" style="background:#141a33;border:1px solid #263056;border-radius:6px;padding:2px 8px;color:#cbd5e1;cursor:pointer">—</button>
           <button id="sia-close" title="kapat" style="background:#24131b;border:1px solid #4a1f2f;border-radius:6px;padding:2px 8px;color:#fecaca;cursor:pointer">×</button>
@@ -287,6 +307,8 @@
     STATE.ui.overlayVal = wrap.querySelector('#sia-overlay-val');
     STATE.ui.overlayStyle = wrap.querySelector('#sia-overlay-style');
     STATE.ui.overlayStyleRow = wrap.querySelector('#sia-style-row');
+    const themeToggleBtn = wrap.querySelector('#sia-theme-toggle');
+    applyThemeToUI();
     if (STATE.ui.overlayRange){
       const pct=Math.round(STATE.overlay.opacity*100);
       STATE.ui.overlayRange.value=pct;
@@ -297,6 +319,23 @@
     }
     if (STATE.ui.overlayStyle){
       STATE.ui.overlayStyle.value = normalizeMode(STATE.overlay.mode);
+    }
+    if (themeToggleBtn){
+      const syncThemeBtn=()=>{
+        const cur=getUITheme();
+        themeToggleBtn.textContent = cur==='dark' ? '☀️' : '🌙';
+        themeToggleBtn.title = cur==='dark' ? 'Switch to light theme' : 'Switch to dark theme';
+        themeToggleBtn.style.background = cur==='dark' ? '#111827' : '#f1f5f9';
+        themeToggleBtn.style.color = cur==='dark' ? '#cbd5e1' : '#0f172a';
+        themeToggleBtn.style.borderColor = cur==='dark' ? '#263056' : '#cbd5e1';
+      };
+      syncThemeBtn();
+      themeToggleBtn.onclick=()=>{
+        const cur=getUITheme();
+        const next = cur==='dark' ? 'light' : 'dark';
+        setUITheme(next);
+        location.reload();
+      };
     }
 
     // drag (WHY: imlece “yapışma” olmasın diye window dinlenir)
@@ -395,8 +434,11 @@
     updateUIState();
   }
   if (document.readyState==='loading') document.addEventListener('DOMContentLoaded', mountUI); else mountUI();
+  // ensure default UI theme is recorded
+  setUITheme(getUITheme());
 
   function updateUIState(msg){
+    applyThemeToUI();
     const hasTpl = !!STATE.template.canvas;
     if (STATE.ui.clearBtn){
       STATE.ui.clearBtn.disabled = !hasTpl;
@@ -433,6 +475,25 @@
       try{ window.postMessage({type:'SIA_CLEAR'}, '*'); }catch(_){}
     }
     STATE.placed=false;
+  }
+
+  function applyUITheme(theme, refs){
+    if(theme!=='light') return;
+    const { wrap, head, body, fileBtn, clearBtn, overlayToggle } = refs;
+    if(wrap){ wrap.style.color='#0f172a'; }
+    if(head){
+      head.style.background='#e2e8f0';
+      head.style.border='1px solid #cbd5e1';
+      head.style.color='#0f172a';
+    }
+    if(body){
+      body.style.background='#f8fafc';
+      body.style.border='1px solid #cbd5e1';
+    }
+    const styleBtn=(btn,bg,border,color)=>{ if(!btn) return; btn.style.background=bg; btn.style.border=`1px solid ${border}`; btn.style.color=color; };
+    styleBtn(fileBtn,'#e2e8f0','#cbd5e1','#0f172a');
+    styleBtn(overlayToggle,'#e2e8f0','#cbd5e1','#0f172a');
+    styleBtn(clearBtn,'#fee2e2','#fca5a5','#991b1b');
   }
 
   function parseTileXY(url){
@@ -638,12 +699,13 @@
         if(!obj) return orig.apply(this, arguments);
 
         const tileX=+mm[2], tileY=+mm[3];
+        const WORLD=4000;
 
         // Anchor: TOP-LEFT (no offset) + persist
         if(STATE.template.canvas && STATE.wantAnchorFromPaint && !STATE.anchor && Array.isArray(obj.coords) && obj.coords.length>=2){
           const x0=Number(obj.coords[0])||0, y0=Number(obj.coords[1])||0;
-          const gx=(tileX%4)*1000 + x0;
-          const gy=(tileY%4)*1000 + y0;
+          const gx=(((tileX%4)+4)%4)*1000 + x0;
+          const gy=(((tileY%4)+4)%4)*1000 + y0;
           STATE.anchor={gx,gy}; STATE.wantAnchorFromPaint=false;
           savePersist(); // WHY: anchor kalıcı
           hint(`✅ Template created. Coordinates: ${gx}, ${gy}`);
@@ -659,8 +721,10 @@
           const coords=obj.coords, colors=obj.colors.slice();
           for (let i=0,j=0;i<coords.length;i+=2,j++){
             const x=Number(coords[i]), y=Number(coords[i+1]);
-            const gpx=(tileX%4)*1000 + x, gpy=(tileY%4)*1000 + y;
-            const lx=gpx-STATE.anchor.gx, ly=gpy-STATE.anchor.gy;
+            const gpx=(((tileX%4)+4)%4)*1000 + x;
+            const gpy=(((tileY%4)+4)%4)*1000 + y;
+            const lx=((gpx-STATE.anchor.gx)%WORLD+WORLD)%WORLD;
+            const ly=((gpy-STATE.anchor.gy)%WORLD+WORLD)%WORLD;
             if(lx>=0 && ly>=0 && lx<STATE.template.w && ly<STATE.template.h){
               const d=STATE.template.ctx.getImageData(lx,ly,1,1).data;
               if(d[3]>=128){
