@@ -7,8 +7,8 @@
 // @license      MPL-2.0
 // @homepageURL  https://raw.githubusercontent.com/Jahykun/SiaMarble
 // @icon         https://raw.githubusercontent.com/Jahykun/SiaDBase/refs/heads/main/favicon.ico
-// @updateURL    https://raw.githubusercontent.com/Jahykun/SiaMarble/refs/heads/main/siamarble.js
-// @downloadURL  https://raw.githubusercontent.com/Jahykun/SiaMarble/refs/heads/main/siamarble.js
+// @updateURL    https://raw.githubusercontent.com/Jahykun/SiaMarble/refs/heads/main/siamarble.wplc.js
+// @downloadURL  https://raw.githubusercontent.com/Jahykun/SiaMarble/refs/heads/main/siamarble.wplc.js
 // @match        https://wplace.live/*
 // @run-at       document-start
 // @grant        none
