@@ -10,11 +10,11 @@ It focuses on template overlay utilities (visual guidance, outline/overlay handl
 
 ---
 
-## Quick Links
+## Quick Installation Links for Tampermonkey
 
-- **Install (Wplace.live):** [siamarble.wplc.js](https://raw.githubusercontent.com/Jahykun/SiaMarble/refs/heads/main/siamarble.wplc.js)
-- **Install (OpenPlace.live):** [siamarble.oplc.js](https://raw.githubusercontent.com/Jahykun/SiaMarble/refs/heads/main/siamarble.oplc.js)
-- **Repository:** [github.com/Jahykun/SiaMarble](https://github.com/Jahykun/SiaMarble)
+- **Install for Wplace.live:** [siamarble.wplc.js](https://www.tampermonkey.net/script_installation.php#url=https://github.com/Jahykun/SiaMarble/releases/download/NewVersion/siamarble.wplc.js)
+- **Install for OpenPlace.live:** [siamarble.oplc.js](https://www.tampermonkey.net/script_installation.php#url=https://github.com/Jahykun/SiaMarble/releases/download/NewVersion/siamarble.oplc.js)
+
 
 ---
 
@@ -23,21 +23,23 @@ It focuses on template overlay utilities (visual guidance, outline/overlay handl
 ### Wplace.live version
 - **File:** `siamarble.wplc.js`
 - **Site:** [wplace.live](https://wplace.live)
-- **Direct install:** https://raw.githubusercontent.com/Jahykun/SiaMarble/refs/heads/main/siamarble.wplc.js
+- **Direct install:** [. . .](https://github.com/Jahykun/SiaMarble/releases/download/NewVersion/siamarble.wplc.js)
 
 ### OpenPlace.live version
 - **File:** `siamarble.oplc.js`
 - **Site:** [openplace.live](https://openplace.live)
-- **Direct install:** https://raw.githubusercontent.com/Jahykun/SiaMarble/refs/heads/main/siamarble.oplc.js
+- **Direct install:** [. . .](https://github.com/Jahykun/SiaMarble/releases/download/NewVersion/siamarble.oplc.js)
 
 ---
 
 ## Features
 
+- Auto-Color Placer.
 - Template overlay support (image overlay on the map/canvas)
-- Outline overlay support (visual border/guide)
-- Overlay visibility + opacity handling
-- Automatically re-binds after map style reloads (so your overlay doesn’t randomly vanish)
+- Color-Picker for the template you upload.
+- Outline overlay support (visual border/guide).
+- Overlay visibility + opacity handling.
+- Automatically re-binds after map style reloads (so your overlay doesn’t randomly vanish).
 
 > Exact UI/controls may vary by site and updates.
 
@@ -56,8 +58,8 @@ It focuses on template overlay utilities (visual guidance, outline/overlay handl
 ### Option A: One-click install (recommended)
 1. Install **Tampermonkey** (or **Violentmonkey**) in your browser.
 2. Open one of these links:
-   - Wplace: https://raw.githubusercontent.com/Jahykun/SiaMarble/refs/heads/main/siamarble.wplc.js
-   - OpenPlace: https://raw.githubusercontent.com/Jahykun/SiaMarble/refs/heads/main/siamarble.oplc.js
+   - Wplace: [Click to Install](https://www.tampermonkey.net/script_installation.php#url=https://github.com/Jahykun/SiaMarble/releases/download/NewVersion/siamarble.wplc.js)
+   - OpenPlace: [Click to Install](https://www.tampermonkey.net/script_installation.php#url=https://github.com/Jahykun/SiaMarble/releases/download/NewVersion/siamarble.oplc.js)
 3. Your userscript manager will prompt you to install. Click **Install**.
 4. Visit the target site and refresh the page.
 
@@ -75,7 +77,10 @@ A full step-by-step tutorial will be added soon.
 For now:
 1. Go to the target site (Wplace or OpenPlace).
 2. Ensure the script is **enabled** in your userscript manager.
-3. Use the in-page SiaMarble controls (or commands) to load/show/clear your overlay.
+3. Upload the template you want to use.
+4. Select beginning pixel.
+5. Check the "Auto-color replacement" box if you want script to automatically.
+
 
 If you want the tutorial section to be extremely clear, send me:
 - A screenshot of your UI panel
@@ -108,9 +113,9 @@ Please read and follow each site’s Terms of Service and rules.
 ### Overlay does not appear
 - Refresh the page (hard refresh: `Ctrl+Shift+R`)
 - Make sure the script is enabled in Tampermonkey/Violentmonkey
-- Disable conflicting userscripts/extensions
-- Check the browser console for logs:
-  - Look for `[SiaMarble:page]` messages
+- Disable and re enable the conflicting userscript.
+
+
 
 ### Script seems broken after updates
 - Reinstall from the raw link (or update via userscript manager)
@@ -130,7 +135,6 @@ PRs and issues are welcome.
 ## License & Credits
 
 - Code is licensed under the **Mozilla Public License 2.0 (MPL-2.0)**.
-- The “Blue Marble” icon is **CC0 1.0** (Public Domain dedication), image owned by **NASA**.
 
 ---
 
