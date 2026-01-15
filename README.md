@@ -12,8 +12,8 @@ It focuses on template overlay utilities (visual guidance, outline/overlay handl
 
 ## Quick Installation Links for Tampermonkey
 
-- **Install for Wplace.live:** [siamarble.wplc.js](https://www.tampermonkey.net/script_installation.php#url=https://github.com/Jahykun/SiaMarble/releases/download/NewVersion/siamarble.wplc.js)
-- **Install for OpenPlace.live:** [siamarble.oplc.js](https://www.tampermonkey.net/script_installation.php#url=https://github.com/Jahykun/SiaMarble/releases/download/NewVersion/siamarble.oplc.js)
+- **Install for Wplace.live:** [siamarble.wplc.js](https://www.tampermonkey.net/script_installation.php#url=https://raw.githubusercontent.com/Jahykun/SiaMarble/refs/heads/main/siamarble.wplc.js)
+- **Install for OpenPlace.live:** [siamarble.oplc.js](https://www.tampermonkey.net/script_installation.php#url=https://raw.githubusercontent.com/Jahykun/SiaMarble/refs/heads/main/siamarble.oplc.js)
 
 
 ---
