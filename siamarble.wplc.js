@@ -1028,12 +1028,9 @@
 
   function parseTileXY(url){
     try{
-      const mm=/\/tiles\/(\d+)\/(\d+)\.png/i.exec(url);
+      const u = new URL(url, location.href);
+      const mm=/\/(?:files\/s\d+\/)?tiles\/(\d+)\/(\d+)\.png$/i.exec(u.pathname);
       if(mm) return [Number(mm[1]), Number(mm[2])];
-      const parts=url.split('/');
-      const yPart=parts.pop(); const xPart=parts.pop();
-      const y=Number((yPart||'').split('.')[0]); const x=Number(xPart);
-      if(Number.isFinite(x) && Number.isFinite(y)) return [x,y];
     }catch(_){}
     return null;
   }
@@ -1072,9 +1069,104 @@
   function isMeEndpoint(url){
     try{
       const u = new URL(url, location.href);
-      return /\/me(\/|$)/.test(u.pathname);
+      return u.pathname.replace(/\/+$/, '') === '/me';
     }catch(_){}
     return false;
+  }
+
+  function isPaintPayload(obj){
+    if(!obj || typeof obj !== 'object' || !Array.isArray(obj.tiles)) return false;
+    return obj.tiles.some((tile)=>{
+      const p = tile && tile.pixels;
+      return p && Array.isArray(p.x) && Array.isArray(p.y) && Array.isArray(p.colors);
+    });
+  }
+
+  function patchPaintPayload(payload){
+    if(!isPaintPayload(payload)) return payload;
+
+    const WORLD = 4000;
+    let patchedTiles = null;
+    let changedCount = 0;
+
+    const ensurePatchedTiles = ()=>{
+      if(patchedTiles) return patchedTiles;
+      patchedTiles = payload.tiles.map((tile)=>{
+        const p = tile && tile.pixels;
+        return {
+          ...tile,
+          pixels: p ? {
+            ...p,
+            x: Array.isArray(p.x) ? p.x.slice() : p.x,
+            y: Array.isArray(p.y) ? p.y.slice() : p.y,
+            colors: Array.isArray(p.colors) ? p.colors.slice() : p.colors
+          } : p
+        };
+      });
+      return patchedTiles;
+    };
+
+    for(let ti=0; ti<payload.tiles.length; ti++){
+      const tile = payload.tiles[ti];
+      const pixels = tile && tile.pixels;
+      if(!pixels || !Array.isArray(pixels.x) || !Array.isArray(pixels.y) || !Array.isArray(pixels.colors)) continue;
+
+      const tileX = Number(tile.x);
+      const tileY = Number(tile.y);
+      if(!Number.isFinite(tileX) || !Number.isFinite(tileY)) continue;
+
+      invalidateTileCache(tileX, tileY);
+
+      if(STATE.template.canvas && STATE.wantAnchorFromPaint && !STATE.anchor && pixels.x.length && pixels.y.length){
+        const x0 = Number(pixels.x[0]);
+        const y0 = Number(pixels.y[0]);
+        if(Number.isFinite(x0) && Number.isFinite(y0)){
+          const pick = {
+            tileX, tileY, x:x0, y:y0,
+            gx:(((tileX%4)+4)%4)*1000 + x0,
+            gy:(((tileY%4)+4)%4)*1000 + y0
+          };
+          STATE.lastPick = pick;
+          updateCoordUI();
+          setAnchorFromPick(pick, 'paint');
+        }
+      }
+
+      if(!(STATE.autoColor && STATE.template.ctx && STATE.anchor)) continue;
+
+      const outTile = ensurePatchedTiles()[ti];
+      const outColors = outTile && outTile.pixels && outTile.pixels.colors;
+      if(!Array.isArray(outColors)) continue;
+
+      const limit = Math.min(pixels.x.length, pixels.y.length, outColors.length);
+      for(let i=0; i<limit; i++){
+        const x = Number(pixels.x[i]);
+        const y = Number(pixels.y[i]);
+        if(!Number.isFinite(x) || !Number.isFinite(y)) continue;
+
+        const gpx = (((tileX%4)+4)%4)*1000 + x;
+        const gpy = (((tileY%4)+4)%4)*1000 + y;
+        const lx = ((gpx-STATE.anchor.gx)%WORLD+WORLD)%WORLD;
+        const ly = ((gpy-STATE.anchor.gy)%WORLD+WORLD)%WORLD;
+        if(lx>=0 && ly>=0 && lx<STATE.template.w && ly<STATE.template.h){
+          const d = STATE.template.ctx.getImageData(Math.floor(lx), Math.floor(ly), 1, 1).data;
+          if(d[3]>=128){
+            const closestKey = findClosestColor(d[0], d[1], d[2]);
+            const id = STATE.pmap.get(closestKey);
+            if(id!=null && outColors[i] !== Number(id)){
+              outColors[i] = Number(id);
+              changedCount++;
+            }
+          }
+        }
+      }
+    }
+
+    if(changedCount > 0){
+      console.info(`[SiaMarble] Auto-color patched ${changedCount} paint pixel(s).`);
+      return { ...payload, tiles: patchedTiles || payload.tiles };
+    }
+    return payload;
   }
 
   function bumpTileCache(reason){
@@ -1366,9 +1458,47 @@
     if(d.type==='SIA_PLACED'){ STATE.placed=true; hint('Taslak GL üzerinde.'); }
   }, false);
 
+  // ---------------------- JSON PATCH: Wplace /paint payload before Pawtect signing ----------------------
+  ;(function patchJsonStringify(){
+    const orig = JSON.stringify;
+    if(orig && orig.__SIA_PATCHED__) return;
+    function siaStringify(value, replacer, space){
+      try{
+        if(replacer === undefined && isPaintPayload(value)){
+          value = patchPaintPayload(value);
+        }
+      }catch(e){
+        console.warn('[SiaMarble] Paint payload patch failed:', e);
+      }
+      return orig.call(JSON, value, replacer, space);
+    }
+    try{
+      Object.defineProperty(siaStringify, '__SIA_PATCHED__', { value:true });
+      Object.defineProperty(siaStringify, '__SIA_ORIG__', { value:orig });
+    }catch(_){}
+    JSON.stringify = siaStringify;
+  })();
+
   // ---------------------- FETCH PATCH: Anchor (TOP-LEFT) + Auto-Color ----------------------
   ;(function patchFetch(){
     const orig=window.fetch;
+    const origFetchErrors = typeof WeakSet === 'function' ? new WeakSet() : null;
+    function rememberOrigFetchError(err){
+      if(origFetchErrors && err && (typeof err === 'object' || typeof err === 'function')){
+        try{ origFetchErrors.add(err); }catch(_){}
+      }
+      return err;
+    }
+    function isOrigFetchError(err){
+      return !!(origFetchErrors && err && (typeof err === 'object' || typeof err === 'function') && origFetchErrors.has(err));
+    }
+    function callOrigFetch(ctx, args){
+      try{
+        return Promise.resolve(orig.apply(ctx, args)).catch((err)=>{ throw rememberOrigFetchError(err); });
+      }catch(err){
+        throw rememberOrigFetchError(err);
+      }
+    }
     window.fetch=async function(input, init){
       try{
         const url=(typeof input==='string')?input:(input&&input.url)||'';
@@ -1387,7 +1517,7 @@
         // Tile overlay (image responses)
         // Dot modları da dahil olmak üzere template varsa ve visible ise devreye girer
         if(method==='GET' && tileMatch && STATE.template.canvas && STATE.anchor && STATE.overlay.visible){
-          const res=await orig.apply(this, arguments);
+          const res=await callOrigFetch(this, arguments);
           const ctype=res.headers?.get('content-type')||'';
           if(!ctype.includes('image')) return res;
           const etag = res.headers?.get('etag') || res.headers?.get('last-modified') || '';
@@ -1406,21 +1536,21 @@
         }
 
         if(method==='GET' && isMeEndpoint(url)){
-          const res=await orig.apply(this, arguments);
+          const res=await callOrigFetch(this, arguments);
           if(res && res.ok){
             res.clone().json().then(setChargeData).catch(()=>{});
           }
           return res;
         }
 
-        if(!pixelTile || method!=='POST') return orig.apply(this, arguments);
+        if(!pixelTile || method!=='POST') return callOrigFetch(this, arguments);
 
         // body parse
         let bodyText=null;
         if (init && typeof init.body==='string') bodyText=init.body;
         else if (typeof input!=='string' && input && input.clone){ try{ bodyText=await input.clone().text(); }catch{} }
         let obj=null; try{ obj = bodyText ? JSON.parse(bodyText) : null; }catch{ obj=null; }
-        if(!obj) return orig.apply(this, arguments);
+        if(!obj) return callOrigFetch(this, arguments);
 
         const tileX=pixelTile.tileX, tileY=pixelTile.tileY;
         invalidateTileCache(tileX, tileY);
@@ -1458,10 +1588,12 @@
           }
           const patched=JSON.stringify({ ...obj, colors });
           const nextInit=Object.assign({}, init, { body: patched });
-          return orig.call(this, input, nextInit);
+          return callOrigFetch(this, [input, nextInit]);
         }
-      }catch(_){}
-      return orig.apply(this, arguments);
+      }catch(err){
+        if(isOrigFetchError(err)) throw err;
+      }
+      return callOrigFetch(this, arguments);
     };
   })();
 
