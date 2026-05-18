@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SiaMarble — Pixel Art Placement Assist
 // @namespace    https://github.com/Jahykun
-// @version      3.8.3
+// @version      3.9.1
 // @description  A userscript to automate and/or enhance the user experience on Wplace.live. Make sure to comply with the site's Terms of Service, and rules! This script is not affiliated with Wplace.live in any way, use at your own risk. This script is not affiliated with TamperMonkey. The author of this userscript is not responsible for any damages, issues, loss of data, or punishment that may occur as a result of using this script. This script is provided "as is" under the MPL-2.0 license. The "Blue Marble" icon is licensed under CC0 1.0 Universal (CC0 1.0) Public Domain Dedication.
 // @author       Siacchy
 // @license      MPL-2.0
@@ -81,12 +81,12 @@
     Merc.prototype.pixelsToMeters=function(px,py,z){ var r=this.res(z); return [px*r - this.half, this.half - py*r]; };
     Merc.prototype.metersToLatLon=function(mx,my){ var lon=mx/this.half*180; var lat=my/this.half*180; lat=180/Math.PI*(2*Math.atan(Math.exp(lat*Math.PI/180))-Math.PI/2); return [lat,lon]; };
     Merc.prototype.pixelsToLatLon=function(px,py,z){ var m=this.pixelsToMeters(px,py,z); return this.metersToLatLon(m[0],m[1]); };
-    var merc=new Merc(); var Z_ART=2;
+    var merc=new Merc(); var Z_ART=11, ART_TILE_SIZE=1000;
     function artPxToMercPxZ2(gx,gy){
-      var tx=Math.floor(gx/1000), ty=Math.floor(gy/1000);
-      var ox=gx - tx*1000, oy=gy - ty*1000;
-      var px=tx*256 + (ox*256/1000);
-      var py=ty*256 + (oy*256/1000);
+      var tx=Math.floor(gx/ART_TILE_SIZE), ty=Math.floor(gy/ART_TILE_SIZE);
+      var ox=gx - tx*ART_TILE_SIZE, oy=gy - ty*ART_TILE_SIZE;
+      var px=tx*256 + (ox*256/ART_TILE_SIZE);
+      var py=ty*256 + (oy*256/ART_TILE_SIZE);
       return [px,py];
     }
 
@@ -100,6 +100,28 @@
       try{ if(S.map.getSource && S.map.getSource(SRC_IMG))    S.map.removeSource(SRC_IMG);}catch(_){}
       try{ if(S.map.getSource && S.map.getSource(SRC_OUT))    S.map.removeSource(SRC_OUT);}catch(_){}
       S.placed=false;
+    }
+
+    function refreshTiles(){
+      if(!S.map) return;
+      try{ if(S.map.triggerRepaint) S.map.triggerRepaint(); }catch(_){}
+      try{ if(S.map.refreshTiles) S.map.refreshTiles(); }catch(_){}
+      try{
+        var st=S.map.style;
+        if(!st) return;
+        var buckets=[st.sourceCaches, st._sourceCaches, st.tileManagers].filter(Boolean);
+        buckets.forEach(function(group){
+          Object.keys(group).forEach(function(id){
+            var src=group[id];
+            try{ if(src.clearTiles) src.clearTiles(); }catch(_){}
+            try{ if(src.reload) src.reload(); }catch(_){}
+            try{ if(src.update) src.update(S.map.transform); }catch(_){}
+            try{ if(src.pause && src.resume){ src.pause(); src.resume(); } }catch(_){}
+            try{ if(st._reloadSource) st._reloadSource(id); }catch(_){}
+          });
+        });
+      }catch(_){}
+      try{ if(S.map.triggerRepaint) S.map.triggerRepaint(); }catch(_){}
     }
 
     function tryPlace(payload){
@@ -165,6 +187,7 @@
       var d=e && e.data; if(!d || typeof d!=='object') return;
       if(d.type==='SIA_PLACE'){ tryPlace(d.payload); }
       else if(d.type==='SIA_CLEAR'){ try{ clearLayers(); }catch(_){} S.last=null; }
+      else if(d.type==='SIA_REFRESH'){ refreshTiles(); if(S.last) tryPlace(S.last); }
     }, false);
   }
   (function injectPage(){ try{ var s=document.createElement('script'); s.textContent='('+__SIA_PAGE_HOOK__.toString()+')();'; (document.head||document.documentElement).appendChild(s); s.remove(); }catch(_){}})();
@@ -175,6 +198,7 @@
   const LS_UI_THEME = 'sia.marble.uiTheme';
   const LS_FILTER_KEY = 'sia.marble.filters';
   const TILE_CACHE_MAX = 200;
+  const TILE_SIZE = 1000;
   const FILE_BTN_DEFAULT = '📁 Upload Template (.png)';
   const FILE_NAME_DEFAULT = '-  No file selected.  -';
   const STATE = {
@@ -190,9 +214,10 @@
     autoColor:false,
     charge:{data:null, timer:null},
     tileCache:{enabled:true, max:TILE_CACHE_MAX, version:0, map:new Map()},
-    ui:{root:null, body:null, status:null, hint:null, minBtn:null, clearBtn:null, fileBtn:null, fileName:null, overlayToggle:null, overlayRange:null, overlayVal:null, overlayStyle:null, overlayStyleButtons:null, overlayStyleRow:null, colorList:null, colorSearch:null, coordRow:null, coordText:null, coordBtn:null, chargeInfo:null, autoColorCb:null, minimized:false, drag:{dx:0, dy:0, dragging:false, pid:null}},
+    ui:{root:null, body:null, status:null, hint:null, minBtn:null, refreshBtn:null, clearBtn:null, fileBtn:null, fileName:null, overlayToggle:null, overlayRange:null, overlayVal:null, overlayStyle:null, overlayStyleButtons:null, overlayStyleRow:null, colorList:null, colorSearch:null, coordRow:null, coordText:null, coordBtn:null, chargeInfo:null, autoColorCb:null, minimized:false, drag:{dx:0, dy:0, dragging:false, pid:null}},
     lastPlacePayload:null, placed:false,
-    pageOverlay:false
+    pageOverlay:false,
+    pendingTemplateRefresh:0
   };
   const log=(...a)=>console.info('[SiaMarble]',...a);
   const hint=(t)=>{ if(STATE.ui.hint) STATE.ui.hint.textContent=t||''; if(t) log(t); };
@@ -201,6 +226,10 @@
     if(!Number.isFinite(n)) return STATE.overlay.opacity;
     return Math.min(1, Math.max(0, n));
   };
+  const toGlobalPixel=(tileX, tileY, x, y)=>({
+    gx:Number(tileX) * TILE_SIZE + Number(x),
+    gy:Number(tileY) * TILE_SIZE + Number(y)
+  });
   // Mode normalizer: supports full, dots, dots+map
   const normalizeMode=(v)=>{
     if(v==='dots' || v==='half_dots') return v;
@@ -222,6 +251,7 @@
       overlayStyle:STATE.ui.overlayStyle,
       colorSearch:STATE.ui.colorSearch,
       coordBtn:STATE.ui.coordBtn,
+      refreshBtn:STATE.ui.refreshBtn,
       chargeInfo:STATE.ui.chargeInfo,
       hint:STATE.ui.hint
     };
@@ -249,7 +279,14 @@
   function savePersist(){
     try{
       const t = STATE.template?.canvas ? STATE.template.canvas.toDataURL('image/png') : null;
-      const a = STATE.anchor ? {gx:STATE.anchor.gx, gy:STATE.anchor.gy} : null;
+      let a = null;
+      if(STATE.anchor){
+        a = {gx:Number(STATE.anchor.gx), gy:Number(STATE.anchor.gy)};
+        for(const k of ['tileX','tileY','x','y']){
+          const n = Number(STATE.anchor[k]);
+          if(Number.isFinite(n)) a[k] = n;
+        }
+      }
       const payload = { t, w:STATE.template?.w||0, h:STATE.template?.h||0, a, name: STATE.templateName || null };
       localStorage.setItem(LS_KEY, JSON.stringify(payload));
       saveOverlayPrefs();
@@ -368,6 +405,7 @@
           <button id="sia-theme-toggle" title="Switch theme" style="background:#111827;border:1px solid #263056;border-radius:6px;padding:2px 6px;color:#cbd5e1;cursor:pointer;">🌙</button>
         </strong>
         <div style="margin-left:auto;display:flex;gap:6px;">
+          <button id="sia-refresh" title="yenile" style="background:#111827;border:1px solid #263056;border-radius:6px;padding:2px 8px;color:#cbd5e1;cursor:pointer">🔄</button>
           <button id="sia-min" title="küçült" style="background:#141a33;border:1px solid #263056;border-radius:6px;padding:2px 8px;color:#cbd5e1;cursor:pointer">—</button>
           <button id="sia-close" title="kapat" style="background:#24131b;border:1px solid #4a1f2f;border-radius:6px;padding:2px 8px;color:#fecaca;cursor:pointer">×</button>
         </div>
@@ -417,6 +455,7 @@
     STATE.ui.status = wrap.querySelector('#sia-status');
     STATE.ui.hint = wrap.querySelector('#sia-hint');
     STATE.ui.minBtn = wrap.querySelector('#sia-min');
+    STATE.ui.refreshBtn = wrap.querySelector('#sia-refresh');
     STATE.ui.clearBtn = wrap.querySelector('#sia-clear');
     STATE.ui.fileBtn = wrap.querySelector('#sia-file-btn');
     STATE.ui.fileName = wrap.querySelector('#sia-file-name');
@@ -484,6 +523,10 @@
           STATE.ui.minBtn.style.padding = '1px 6px';
           STATE.ui.minBtn.style.fontSize = '11px';
         }
+        if(STATE.ui.refreshBtn){
+          STATE.ui.refreshBtn.style.padding = '1px 6px';
+          STATE.ui.refreshBtn.style.fontSize = '11px';
+        }
         if(closeBtn){
           closeBtn.style.padding = '1px 6px';
           closeBtn.style.fontSize = '11px';
@@ -505,6 +548,10 @@
         if(STATE.ui.minBtn){
           STATE.ui.minBtn.style.padding = '2px 8px';
           STATE.ui.minBtn.style.fontSize = '';
+        }
+        if(STATE.ui.refreshBtn){
+          STATE.ui.refreshBtn.style.padding = '2px 8px';
+          STATE.ui.refreshBtn.style.fontSize = '';
         }
         if(closeBtn){
           closeBtn.style.padding = '2px 8px';
@@ -544,6 +591,10 @@
       window.addEventListener('pointerup', onUp, {capture:true});
       window.addEventListener('pointercancel', onUp, {capture:true});
     });
+
+    if(STATE.ui.refreshBtn){
+      STATE.ui.refreshBtn.onclick = ()=>requestTemplateRefresh('manual refresh', 0, true);
+    }
 
     // minimize / expand
     STATE.ui.minBtn.onclick = ()=>{
@@ -657,6 +708,11 @@
       STATE.ui.clearBtn.style.opacity = hasTpl ? '1' : '.6';
       STATE.ui.clearBtn.style.cursor  = hasTpl ? 'pointer' : 'not-allowed';
     }
+    if (STATE.ui.refreshBtn){
+      STATE.ui.refreshBtn.disabled = !hasTpl;
+      STATE.ui.refreshBtn.style.opacity = hasTpl ? '1' : '.6';
+      STATE.ui.refreshBtn.style.cursor  = hasTpl ? 'pointer' : 'not-allowed';
+    }
     if (STATE.ui.overlayToggle){
       STATE.ui.overlayToggle.disabled = !hasTpl;
       STATE.ui.overlayToggle.style.opacity = hasTpl ? '1' : '.6';
@@ -748,7 +804,12 @@
     const gx = Number(pick.gx);
     const gy = Number(pick.gy);
     if(!Number.isFinite(gx) || !Number.isFinite(gy)) return;
-    STATE.anchor = {gx, gy};
+    const anchor = {gx, gy};
+    for(const k of ['tileX','tileY','x','y']){
+      const n = Number(pick[k]);
+      if(Number.isFinite(n)) anchor[k] = n;
+    }
+    STATE.anchor = anchor;
     STATE.wantAnchorFromPaint = false;
     bumpTileCache('anchor');
     savePersist();
@@ -848,7 +909,7 @@
 
   function applyUITheme(theme, refs){
     if(theme!=='light') return;
-    const { wrap, head, body, status, fileBtn, clearBtn, overlayToggle, overlayStyle, colorSearch, coordBtn, chargeInfo, hint } = refs;
+    const { wrap, head, body, status, fileBtn, clearBtn, overlayToggle, overlayStyle, colorSearch, coordBtn, refreshBtn, chargeInfo, hint } = refs;
     if(wrap){ wrap.style.color='#0f172a'; }
     if(head){
       head.style.background='#e2e8f0';
@@ -869,6 +930,7 @@
     styleBtn(overlayToggle,'#e2e8f0','#cbd5e1','#0f172a');
     styleBtn(clearBtn,'#fee2e2','#fca5a5','#991b1b');
     styleBtn(coordBtn,'#e2e8f0','#cbd5e1','#0f172a');
+    styleBtn(refreshBtn,'#e2e8f0','#cbd5e1','#0f172a');
     if(overlayStyle){
       overlayStyle.style.background='#e2e8f0';
       overlayStyle.style.border='1px solid #cbd5e1';
@@ -1045,8 +1107,7 @@
       const px = Number(u.searchParams.get('x'));
       const py = Number(u.searchParams.get('y'));
       if(!Number.isFinite(tileX) || !Number.isFinite(tileY) || !Number.isFinite(px) || !Number.isFinite(py)) return null;
-      const gx = (((tileX%4)+4)%4)*1000 + px;
-      const gy = (((tileY%4)+4)%4)*1000 + py;
+      const { gx, gy } = toGlobalPixel(tileX, tileY, px, py);
       return { tileX, tileY, x: px, y: py, gx, gy };
     }catch(_){}
     return null;
@@ -1074,6 +1135,15 @@
     return false;
   }
 
+  function isPaintEndpoint(url){
+    try{
+      const u = new URL(url, location.href);
+      const path = u.pathname.replace(/\/+$/, '');
+      return path === '/paint' || path.endsWith('/paint');
+    }catch(_){}
+    return false;
+  }
+
   function isPaintPayload(obj){
     if(!obj || typeof obj !== 'object' || !Array.isArray(obj.tiles)) return false;
     return obj.tiles.some((tile)=>{
@@ -1085,7 +1155,6 @@
   function patchPaintPayload(payload){
     if(!isPaintPayload(payload)) return payload;
 
-    const WORLD = 4000;
     let patchedTiles = null;
     let changedCount = 0;
 
@@ -1121,10 +1190,10 @@
         const x0 = Number(pixels.x[0]);
         const y0 = Number(pixels.y[0]);
         if(Number.isFinite(x0) && Number.isFinite(y0)){
+          const { gx, gy } = toGlobalPixel(tileX, tileY, x0, y0);
           const pick = {
             tileX, tileY, x:x0, y:y0,
-            gx:(((tileX%4)+4)%4)*1000 + x0,
-            gy:(((tileY%4)+4)%4)*1000 + y0
+            gx, gy
           };
           STATE.lastPick = pick;
           updateCoordUI();
@@ -1144,10 +1213,9 @@
         const y = Number(pixels.y[i]);
         if(!Number.isFinite(x) || !Number.isFinite(y)) continue;
 
-        const gpx = (((tileX%4)+4)%4)*1000 + x;
-        const gpy = (((tileY%4)+4)%4)*1000 + y;
-        const lx = ((gpx-STATE.anchor.gx)%WORLD+WORLD)%WORLD;
-        const ly = ((gpy-STATE.anchor.gy)%WORLD+WORLD)%WORLD;
+        const { gx:gpx, gy:gpy } = toGlobalPixel(tileX, tileY, x, y);
+        const lx = gpx - STATE.anchor.gx;
+        const ly = gpy - STATE.anchor.gy;
         if(lx>=0 && ly>=0 && lx<STATE.template.w && ly<STATE.template.h){
           const d = STATE.template.ctx.getImageData(Math.floor(lx), Math.floor(ly), 1, 1).data;
           if(d[3]>=128){
@@ -1164,9 +1232,23 @@
 
     if(changedCount > 0){
       console.info(`[SiaMarble] Auto-color patched ${changedCount} paint pixel(s).`);
+      STATE.pendingTemplateRefresh += changedCount;
       return { ...payload, tiles: patchedTiles || payload.tiles };
     }
     return payload;
+  }
+
+  function requestTemplateRefresh(reason, delay=0, userVisible=false){
+    const run=()=>{
+      bumpTileCache(reason || 'refresh');
+      if(STATE.overlay.visible && STATE.lastPlacePayload){
+        sendPlaceToMap(false);
+      }
+      try{ window.postMessage({type:'SIA_REFRESH'}, '*'); }catch(_){}
+      if(userVisible) hint('Template refreshed.');
+    };
+    if(delay>0) setTimeout(run, delay);
+    else run();
   }
 
   function bumpTileCache(reason){
@@ -1243,7 +1325,6 @@
 
     const tplW=STATE.template.w, tplH=STATE.template.h;
     const tplLeft=STATE.anchor.gx, tplTop=STATE.anchor.gy;
-    const WORLD=4000;
     
     const rawDotSize = dotMode ? scale * (clearDots ? 0.85 : 0.65) : 1;
     const dotSize = dotMode ? Math.min(scale, Math.max(2, Math.floor(rawDotSize / 2) * 2)) : 1;
@@ -1261,40 +1342,17 @@
       return key;
     };
 
-    function buildSegments(start, size){
-      const segs=[];
-      const end=start+size;
-      const clippedStart=Math.max(0, start);
-      const clippedEnd=Math.min(end, WORLD);
-      segs.push({ start:clippedStart, end:clippedEnd, offset:clippedStart - start });
-      if(end>WORLD){
-        const overflow=end-WORLD;
-        segs.push({ start:0, end:overflow, offset:size-overflow });
-      }
-      if(start<0){
-        const under=-start;
-        segs.push({ start:WORLD-under, end:WORLD, offset:0 });
-      }
-      return segs;
-    }
+    const tileBaseX=Number(tileX) * TILE_SIZE;
+    const tileBaseY=Number(tileY) * TILE_SIZE;
+    const overlapLeft=Math.max(tileBaseX, tplLeft);
+    const overlapRight=Math.min(tileBaseX+tw, tplLeft+tplW);
+    const overlapTop=Math.max(tileBaseY, tplTop);
+    const overlapBottom=Math.min(tileBaseY+th, tplTop+tplH);
 
-    const xSegs=buildSegments(tplLeft, tplW);
-    const ySegs=buildSegments(tplTop, tplH);
-
-    const tileBaseX=((tileX%4)+4)%4*1000;
-    const tileBaseY=((tileY%4)+4)%4*1000;
-
-    for(const sx of xSegs){
-      const overlapLeft=Math.max(tileBaseX, sx.start);
-      const overlapRight=Math.min(tileBaseX+tw, sx.end);
-      if(overlapRight<=overlapLeft) continue;
-      const tplOffsetX = sx.offset + (overlapLeft - sx.start);
-      const tileOffsetX = overlapLeft - tileBaseX;
-      for(const sy of ySegs){
-        const overlapTop=Math.max(tileBaseY, sy.start);
-        const overlapBottom=Math.min(tileBaseY+th, sy.end);
-        if(overlapBottom<=overlapTop) continue;
-        const tplOffsetY = sy.offset + (overlapTop - sy.start);
+    if(overlapRight>overlapLeft && overlapBottom>overlapTop){
+        const tplOffsetX = overlapLeft - tplLeft;
+        const tileOffsetX = overlapLeft - tileBaseX;
+        const tplOffsetY = overlapTop - tplTop;
         const tileOffsetY = overlapTop - tileBaseY;
         const ow=overlapRight - overlapLeft;
         const oh=overlapBottom - overlapTop;
@@ -1344,7 +1402,6 @@
             }
             ctx.putImageData(tileImg, tileOffsetX, tileOffsetY);
         }
-      }
     }
 
     // Convert the final canvas back to a Blob
@@ -1412,14 +1469,29 @@
       bumpTileCache('template restore');
       setFileLabel(STATE.templateName);
       if (saved.a && Number.isFinite(saved.a.gx) && Number.isFinite(saved.a.gy)) {
-        STATE.anchor={gx:Number(saved.a.gx), gy:Number(saved.a.gy)};
-        bumpTileCache('anchor restore');
-        hint(`Placing Template...`);
-        // Note: For restoration, we always pass the DataURL here, 
-        // but `sendPlaceToMap` will clear it if in dot mode.
-        const payload = { dataUrl: saved.t, gx:STATE.anchor.gx, gy:STATE.anchor.gy, w:c.width, h:c.height };
-        STATE.lastPlacePayload = payload;
-        sendPlaceToMap(true);
+        const savedGx = Number(saved.a.gx);
+        const savedGy = Number(saved.a.gy);
+        const hasTileAnchor = Number.isFinite(Number(saved.a.tileX)) && Number.isFinite(Number(saved.a.tileY));
+        if(!hasTileAnchor && Math.abs(savedGx) < 4000 && Math.abs(savedGy) < 4000){
+          STATE.anchor = null;
+          STATE.wantAnchorFromPaint = true;
+          STATE.lastPlacePayload = null;
+          hint('Click or paint a pixel to set anchor.');
+        } else {
+          const anchor = {gx:savedGx, gy:savedGy};
+          for(const k of ['tileX','tileY','x','y']){
+            const n = Number(saved.a[k]);
+            if(Number.isFinite(n)) anchor[k] = n;
+          }
+          STATE.anchor=anchor;
+          bumpTileCache('anchor restore');
+          hint(`Placing Template...`);
+          // Note: For restoration, we always pass the DataURL here, 
+          // but `sendPlaceToMap` will clear it if in dot mode.
+          const payload = { dataUrl: saved.t, gx:STATE.anchor.gx, gy:STATE.anchor.gy, w:c.width, h:c.height };
+          STATE.lastPlacePayload = payload;
+          sendPlaceToMap(true);
+        }
       } else {
         STATE.wantAnchorFromPaint=true;
         hint('Click or paint a pixel to set anchor.');
@@ -1543,6 +1615,21 @@
           return res;
         }
 
+        if(method==='POST' && isPaintEndpoint(url)){
+          const pending = STATE.pendingTemplateRefresh;
+          const res=await callOrigFetch(this, arguments);
+          if(pending > 0){
+            const changed = pending;
+            STATE.pendingTemplateRefresh = Math.max(0, STATE.pendingTemplateRefresh - pending);
+            if(res && res.ok){
+              requestTemplateRefresh('auto-color paint', 350);
+              requestTemplateRefresh('auto-color paint settle', 1600);
+              hint(`Auto-color refreshed ${changed} pixel(s).`);
+            }
+          }
+          return res;
+        }
+
         if(!pixelTile || method!=='POST') return callOrigFetch(this, arguments);
 
         // body parse
@@ -1554,13 +1641,11 @@
 
         const tileX=pixelTile.tileX, tileY=pixelTile.tileY;
         invalidateTileCache(tileX, tileY);
-        const WORLD=4000;
 
         // Anchor: TOP-LEFT (no offset) + persist
         if(STATE.template.canvas && STATE.wantAnchorFromPaint && !STATE.anchor && Array.isArray(obj.coords) && obj.coords.length>=2){
           const x0=Number(obj.coords[0])||0, y0=Number(obj.coords[1])||0;
-          const gx=(((tileX%4)+4)%4)*1000 + x0;
-          const gy=(((tileY%4)+4)%4)*1000 + y0;
+          const { gx, gy } = toGlobalPixel(tileX, tileY, x0, y0);
           const pick = { tileX, tileY, x:x0, y:y0, gx, gy };
           STATE.lastPick = pick;
           updateCoordUI();
@@ -1570,25 +1655,36 @@
         // Auto-color patch
         if (STATE.autoColor && STATE.template.ctx && STATE.anchor && Array.isArray(obj.coords) && Array.isArray(obj.colors)){
           const coords=obj.coords, colors=obj.colors.slice();
+          let changedCount = 0;
           for (let i=0,j=0;i<coords.length;i+=2,j++){
             const x=Number(coords[i]), y=Number(coords[i+1]);
-            const gpx=(((tileX%4)+4)%4)*1000 + x;
-            const gpy=(((tileY%4)+4)%4)*1000 + y;
-            const lx=((gpx-STATE.anchor.gx)%WORLD+WORLD)%WORLD;
-            const ly=((gpy-STATE.anchor.gy)%WORLD+WORLD)%WORLD;
+            const { gx:gpx, gy:gpy } = toGlobalPixel(tileX, tileY, x, y);
+            const lx=gpx-STATE.anchor.gx;
+            const ly=gpy-STATE.anchor.gy;
             if(lx>=0 && ly>=0 && lx<STATE.template.w && ly<STATE.template.h){
-              const d=STATE.template.ctx.getImageData(lx,ly,1,1).data;
+              const d=STATE.template.ctx.getImageData(Math.floor(lx),Math.floor(ly),1,1).data;
               if(d[3]>=128){
                 // USE CLOSEST COLOR LOOKUP HERE TOO
                 const closestKey = findClosestColor(d[0], d[1], d[2]);
                 const id=STATE.pmap.get(closestKey);
-                if(id!=null) colors[j]=Number(id);
+                if(id!=null && colors[j] !== Number(id)){
+                  colors[j]=Number(id);
+                  changedCount++;
+                }
               }
             }
           }
-          const patched=JSON.stringify({ ...obj, colors });
-          const nextInit=Object.assign({}, init, { body: patched });
-          return callOrigFetch(this, [input, nextInit]);
+          if(changedCount > 0){
+            const patched=JSON.stringify({ ...obj, colors });
+            const nextInit=Object.assign({}, init, { body: patched });
+            const res=await callOrigFetch(this, [input, nextInit]);
+            if(res && res.ok){
+              requestTemplateRefresh('auto-color pixel', 350);
+              requestTemplateRefresh('auto-color pixel settle', 1600);
+              hint(`Auto-color refreshed ${changedCount} pixel(s).`);
+            }
+            return res;
+          }
         }
       }catch(err){
         if(isOrigFetchError(err)) throw err;
